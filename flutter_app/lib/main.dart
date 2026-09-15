@@ -8,6 +8,7 @@ import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
 import 'ui/screens/capture_screen.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/crew_screen.dart';
+import 'ui/screens/compete_screen.dart';
 import 'ui/screens/settings_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
 
@@ -51,6 +52,7 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => TelemetrySocket()..startSimulated()),
         ChangeNotifierProvider(create: (_) => ClipRepository()),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
+        ChangeNotifierProvider(create: (_) => WakeRepository()),
       ],
       child: MaterialApp(
         title: 'Binnacle Connect',
@@ -76,11 +78,13 @@ class _RootShellState extends State<_RootShell> {
   Widget build(BuildContext context) {
     final clipRepo = context.watch<ClipRepository>();
     final crewRepo = context.watch<CrewRepository>();
+    final wakeRepo = context.watch<WakeRepository>();
 
     final screens = [
       const CaptureScreen(),
       LibraryScreen(repository: clipRepo),
       CrewScreen(repository: crewRepo),
+      CompeteScreen(repository: wakeRepo),
       const SettingsScreen(),
     ];
 
@@ -94,6 +98,7 @@ class _RootShellState extends State<_RootShell> {
           NavigationDestination(icon: Icon(Icons.videocam_outlined), label: 'Capture'),
           NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Library'),
           NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Crew'),
+          NavigationDestination(icon: Icon(Icons.emoji_events_outlined), label: 'Compete'),
           NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
       ),
