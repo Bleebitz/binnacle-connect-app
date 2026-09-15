@@ -1,0 +1,65 @@
+name: CI
+
+# Runs the checks that previously had to be done by hand, in a sandbox that
+# is rebuilt from scratch each session and does not persist. This is the
+# main reason this repo exists: dart analyze / flutter test / connect_audit
+# now run automatically on every push and pull request, not "whenever
+# someone happens to install Flutter locally."
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  flutter_app:
+    name: Flutter app — analyze, test, static audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: flutter pub get
+        working-directory: flutter_app
+        run: flutter pub get
+
+      - name: dart analyze
+        working-directory: flutter_app
+        run: dart analyze
+
+      - name: flutter test
+        working-directory: flutter_app
+        run: flutter test
+
+      - name: flutter build web (proves it actually compiles end to end)
+        working-directory: flutter_app
+        run: flutter build web
+
+      - name: connect_audit.py static policy audit
+        run: python3 tools/connect_audit/connect_audit.py flutter_app/lib
+
+      - name: connect_audit.py self-test (fixtures must still block/pass correctly)
+        working-directory: tools/connect_audit
+        run: bash run_tests.sh
+
+  web_dashboard:
+    name: Web dashboard — build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: npm ci
+        working-directory: web_dashboard
+        run: npm ci
+
+      - name: npm run build
+        working-directory: web_dashboard
+        run: npm run build
