@@ -8,7 +8,10 @@ import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
 import 'ui/screens/capture_screen.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/crew_screen.dart';
-import 'ui/screens/compete_screen.dart';
+import 'core/models/trick_entry.dart';
+import 'core/models/fall_entry.dart';
+import 'core/models/wake_entry.dart'; // WakeRepository — no longer re-exported via compete_screen.dart
+import 'ui/screens/compete_hub_screen.dart';
 import 'ui/screens/settings_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
 
@@ -53,6 +56,8 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ClipRepository()),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
+        ChangeNotifierProvider(create: (_) => TrickRepository()),
+        ChangeNotifierProvider(create: (_) => FallRepository()),
       ],
       child: MaterialApp(
         title: 'Binnacle Connect',
@@ -78,13 +83,12 @@ class _RootShellState extends State<_RootShell> {
   Widget build(BuildContext context) {
     final clipRepo = context.watch<ClipRepository>();
     final crewRepo = context.watch<CrewRepository>();
-    final wakeRepo = context.watch<WakeRepository>();
 
     final screens = [
       const CaptureScreen(),
       LibraryScreen(repository: clipRepo),
       CrewScreen(repository: crewRepo),
-      CompeteScreen(repository: wakeRepo),
+      const CompeteScreen(),
       const SettingsScreen(),
     ];
 

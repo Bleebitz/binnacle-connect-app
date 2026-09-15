@@ -41,14 +41,21 @@ void main() {
     expect(find.textContaining('SIMULATED'), findsWidgets);
   });
 
-  testWidgets('Compete tab opens King of Wake and speed-class validation works live',
+  testWidgets('Compete tab opens the hub, King of Wake speed-class validation works live',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
 
     await tester.tap(find.text('Compete').last);
     await tester.pumpAndSettle();
+    // Hub screen: all four destinations listed, none of their content shown yet.
     expect(find.text('King of Wake'), findsOneWidget);
+    expect(find.text('Top Tricks'), findsOneWidget);
+    expect(find.text('Best Falls'), findsOneWidget);
+    expect(find.text('Riders'), findsOneWidget);
+
+    await tester.tap(find.text('King of Wake'));
+    await tester.pumpAndSettle();
 
     // Open the entry sheet and confirm the live class-validation text
     // actually reacts to a typed speed — this is the real logic under test,
@@ -74,5 +81,89 @@ void main() {
     await tester.enterText(find.widgetWithText(TextField, 'GPS speed (mph)'), '8.0');
     await tester.pump();
     expect(find.textContaining('Not in range for any class'), findsOneWidget);
+  });
+
+  testWidgets('Top Tricks submit button reacts to typing (regression test for a real bug)',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const BinnacleConnectApp());
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.text('Compete').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Top Tricks'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Log a trick'));
+    await tester.pumpAndSettle();
+
+    // Button starts disabled — trick name is empty.
+    final submitFinder = find.widgetWithText(FilledButton, 'Submit');
+    expect(tester.widget<FilledButton>(submitFinder).onPressed, isNull);
+
+    // The actual bug: typing did nothing because no onChanged->setState was
+    // wired. Confirming the fix by checking the button actually enables.
+    await tester.enterText(find.widgetWithText(TextField, 'Trick name'), 'Backroll');
+    await tester.pump();
+    expect(tester.widget<FilledButton>(submitFinder).onPressed, isNotNull);
+
+    await tester.tap(submitFinder);
+    await tester.pumpAndSettle();
+    expect(find.text('Backroll'), findsOneWidget);
+  });
+
+  testWidgets('Best Falls refuses submission without the rider-OK checkbox',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const BinnacleConnectApp());
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.text('Compete').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Best Falls'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Submit a fall'));
+    await tester.pumpAndSettle();
+
+    // Unticked: button disabled, warning text shown.
+    final submitFinder = find.widgetWithText(FilledButton, 'Submit');
+    expect(tester.widget<FilledButton>(submitFinder).onPressed, isNull);
+    expect(find.textContaining('qualifying gate'), findsOneWidget);
+
+    // Tick the safety checkbox — button must react (same class of check as
+    // the Top Tricks regression test above).
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pump();
+    expect(tester.widget<FilledButton>(submitFinder).onPressed, isNotNull);
+
+    await tester.tap(submitFinder);
+    await tester.pumpAndSettle();
+    expect(find.text('Rider OK signaled'), findsOneWidget);
+  });
+
+  testWidgets('Riders aggregates points across King of Wake, Top Tricks, and Best Falls',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const BinnacleConnectApp());
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.text('Compete').last);
+    await tester.pumpAndSettle();
+
+    // Submit one trick, then check Riders reflects it — proves the pure
+    // computation actually reads live repository state, not a stale copy.
+    await tester.tap(find.text('Top Tricks'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Log a trick'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Rider name'), 'Test Rider');
+    await tester.enterText(find.widgetWithText(TextField, 'Trick name'), 'Tantrum');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Submit'));
+    await tester.pumpAndSettle();
+
+    // Back to hub, into Riders.
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Riders'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Test Rider'), findsOneWidget);
+    expect(find.textContaining('0 wake · 1 tricks · 0 falls'), findsOneWidget);
   });
 }
