@@ -1,0 +1,30 @@
+name: binnacle_connect
+description: Binnacle Connect — phone and cloud companion app for Vision/Track.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2          # ChangeNotifier-based state management
+  web_socket_channel: ^2.4.5 # Control channel (WSS) + telemetry socket
+  uuid: ^4.4.0               # Command id generation, per protocol §5
+  intl: ^0.19.0              # Timestamp / duration formatting
+  google_fonts: ^6.2.1       # Space Grotesk / Inter / JetBrains Mono to match design language
+
+  # NOTE — flutter_webrtc is NOT included as a hard dependency here.
+  # eptz_video_view.dart is written against an abstract interface so the
+  # real plugin can be dropped in without touching UI code. Adding it now
+  # would make this scaffold fail to build in an environment without the
+  # native platform toolchains configured. See lib/core/services/webrtc_service.dart.
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
