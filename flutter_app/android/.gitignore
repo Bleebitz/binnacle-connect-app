@@ -1,0 +1,14 @@
+# gradlew, gradlew.bat, and gradle-wrapper.jar are committed on purpose —
+# that's what lets a clean checkout run ./gradlew with no local Gradle
+# install, which is the whole point of committing this runner at all.
+/.gradle
+/captures/
+/local.properties
+GeneratedPluginRegistrant.java
+.cxx/
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+**/*.keystore
+**/*.jks

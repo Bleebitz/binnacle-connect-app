@@ -10,8 +10,17 @@ build/
 .idea/
 .metadata
 
+# Android runner is generated and committed (see README) — gradle-wrapper
+# .jar IS committed on purpose (that's what makes `gradlew` work on a clean
+# checkout with no local Gradle install); local.properties holds this
+# machine's absolute SDK paths and must never be, same idea as pubspec.lock
+# being committed but .dart_tool/ above not being.
+/android/.gradle/
+/android/local.properties
+/android/**/*.iml
+/android/app/build/
+
 # Platform scaffolds not generated for this repo yet
-/android/
 /ios/
 /macos/
 /linux/

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'core/app_config.dart';
 import 'core/services/control_channel_service.dart';
 import 'core/services/telemetry_socket.dart';
 import 'core/services/pairing_service.dart';
@@ -16,7 +17,49 @@ import 'ui/screens/settings_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
 
 void main() {
+  // Core mode with no URL is a broken deploy, not a reason to quietly act
+  // like a demo — refuse to start the real app so this is loud, not
+  // discovered later as "why is it showing fake data on the boat."
+  if (AppConfig.isMisconfigured) {
+    runApp(const _ConfigErrorApp());
+    return;
+  }
   runApp(const BinnacleConnectApp());
+}
+
+class _ConfigErrorApp extends StatelessWidget {
+  const _ConfigErrorApp();
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: BinnacleTheme.dark(),
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, color: BinnacleColors.orange, size: 40),
+                const SizedBox(height: 16),
+                const Text('Configuration error',
+                    style: TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 18)),
+                const SizedBox(height: 8),
+                Text(
+                  'BINNACLE_APP_MODE=core requires BINNACLE_CORE_URL.\n'
+                  'Pass both --dart-define flags, or omit APP_MODE to run in demo mode.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: BinnacleColors.slate),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class BinnacleConnectApp extends StatelessWidget {
@@ -39,13 +82,15 @@ class BinnacleConnectApp extends StatelessWidget {
           update: (context, pairing, control) {
             final service = control ?? ControlChannelService();
             service.attachPairing(pairing);
-            if (service.status == LinkStatus.simulated) {
-              // Placeholder endpoint. Real value comes from the Core's
-              // pairing flow — see PairingTarget.coreHost once a device is
-              // actually paired. Until then this stays LinkStatus.simulated.
+            // Demo mode must never attempt a network connection — see
+            // app_config.dart. It stays LinkStatus.simulated for the whole
+            // session, which is the point: an honest "Simulated" badge
+            // instead of a connection attempt that immediately fails and
+            // shows "Offline" on every single demo run.
+            if (AppConfig.mode == AppMode.core && service.status == LinkStatus.simulated) {
               service.connect(
                 deviceId: 'vision-0001',
-                endpoint: Uri.parse('wss://core.local/spotter/ws'),
+                endpoint: AppConfig.coreWebSocketEndpoint(),
               );
             }
             return service;
