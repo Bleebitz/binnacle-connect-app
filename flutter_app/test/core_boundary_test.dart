@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -25,7 +26,14 @@ void main() {
     server.listen((request) async {
       final peer = await WebSocketTransformer.upgrade(request);
       peers.add(peer);
-      peer.listen((_) { commands++; });
+      // Only 'cmd' frames count as commands — the very first frame on each
+      // connection is now a real 'auth' frame (see control_channel_service's
+      // AUTH note: the bearer token moved out of the URL and onto the wire
+      // as the first message), which must not be mistaken for a replayed
+      // command.
+      peer.listen((raw) {
+        if (jsonDecode(raw as String)['topic'] == 'cmd') commands++;
+      });
       peer.add(jsonEncode({'topic': 'state', 'payload': {
         'seq': 1, 'ts': DateTime.now().toUtc().toIso8601String(),
         'capture': {'armed': true},
@@ -63,6 +71,46 @@ void main() {
     }
   });
 
+  test('Bearer token is sent as the first frame, never in the connection URL', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    Uri? capturedRequestUri;
+    final firstFrame = Completer<Map<String, dynamic>>();
+    final pairing = PairingService(store: InMemoryCredentialStore());
+    pairing.credential = DeviceCredential(credentialId: 'cred-7', deviceId: 'test',
+        coreHost: 'localhost', role: DeviceRole.owner, issuedAt: DateTime.now(),
+        bearerToken: 'super-secret-do-not-log-me');
+    final control = ControlChannelService(demo: false)..attachPairing(pairing);
+    server.listen((request) async {
+      capturedRequestUri = request.uri;
+      final peer = await WebSocketTransformer.upgrade(request);
+      peer.listen((raw) {
+        if (!firstFrame.isCompleted) {
+          firstFrame.complete(jsonDecode(raw as String) as Map<String, dynamic>);
+        }
+      });
+    });
+    try {
+      await control.connect(deviceId: 'test', endpoint: Uri.parse('ws://127.0.0.1:${server.port}'));
+      final frame = await firstFrame.future.timeout(const Duration(seconds: 2));
+
+      // The handshake URL — what a proxy or server access log would
+      // actually record — must not contain the secret.
+      expect(capturedRequestUri!.queryParameters.containsKey('token'), isFalse);
+      expect(capturedRequestUri!.queryParameters.containsKey('credential_id'), isFalse);
+      expect(capturedRequestUri.toString(), isNot(contains('super-secret-do-not-log-me')));
+
+      // The token only ever appears in the first frame sent over the
+      // already-encrypted (wss) socket.
+      expect(frame['topic'], 'auth');
+      expect(frame['payload']['token'], 'super-secret-do-not-log-me');
+      expect(frame['payload']['credential_id'], 'cred-7');
+    } finally {
+      control.dispose();
+      pairing.dispose();
+      await server.close(force: true);
+    }
+  });
+
   test('Core starts offline and rejects commands before pairing', () {
     final control = ControlChannelService(demo: false);
     expect(control.status, LinkStatus.offline);
@@ -91,7 +139,13 @@ void main() {
       server.listen((request) async {
         peer = await WebSocketTransformer.upgrade(request);
         peer!.listen((raw) {
-          final command = jsonDecode(raw as String)['payload'];
+          final frame = jsonDecode(raw as String);
+          // The first frame on the wire is now 'auth' (see control_channel_
+          // service's AUTH note) — this harness only reacts to 'cmd' frames,
+          // same as a real Core would dispatch by topic rather than assume
+          // every message is a command.
+          if (frame['topic'] != 'cmd') return;
+          final command = frame['payload'];
           if (outcome == 'disconnect') {
             peer!.close();
           } else if (outcome != 'timeout') {

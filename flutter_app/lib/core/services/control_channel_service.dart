@@ -152,6 +152,19 @@ class ControlChannelService extends ChangeNotifier {
   /// shape is a placeholder pending the real Core API contract; this
   /// establishes the client-side pattern (auth token, reconnect, LWT-style
   /// availability) so swapping in the real URL is a one-line change.
+  ///
+  /// AUTH: the bearer token is NEVER put in the URL query string — it would
+  /// end up in proxy/server access logs, browser history, and devtools
+  /// network panels. It's sent as the first frame over the socket instead
+  /// (`{"topic": "auth", ...}`), after the WSS handshake but before any
+  /// command. This also works on the web build, where the browser WebSocket
+  /// API has no way to set custom handshake headers at all — a header-based
+  /// fix wouldn't be usable on every platform this app actually ships on.
+  /// `device_id`/`auth_method` stay in the URL because the Core plausibly
+  /// needs them to route/select a protocol before authentication completes,
+  /// and neither is a secret. This is this client's contract assumption,
+  /// unverified against a real Core (see HttpPairingTransport's note above
+  /// for why — no Core exists yet to verify against).
   Future<void> connect({required String deviceId, required Uri endpoint, String? authToken}) async {
     if (demo) throw StateError('Demo cannot open a Core socket');
     if (!isPaired) throw CommandRejected('not_paired');
@@ -182,10 +195,18 @@ class ControlChannelService extends ChangeNotifier {
         endpoint.replace(queryParameters: {
           'device_id': deviceId,
           'auth_method': cred?.authMethod ?? 'bearer',
-          if (cred != null) 'credential_id': cred.credentialId,
-          if (token != null) 'token': token,
         }),
       );
+      // First frame on the wire, before anything else — see AUTH note above.
+      if (cred != null || token != null) {
+        _channel!.sink.add(jsonEncode({
+          'topic': 'auth',
+          'payload': {
+            if (cred != null) 'credential_id': cred.credentialId,
+            if (token != null) 'token': token,
+          },
+        }));
+      }
       _subscription = _channel!.stream.listen(
         (raw) { if (generation == _generation) _onMessage(raw); },
         onDone: () => _lostConnection(generation),

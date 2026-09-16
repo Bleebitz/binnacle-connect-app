@@ -84,7 +84,7 @@ class MyBoatScreen extends StatelessWidget {
           const SizedBox(height: 10),
           _RiderCard(crew: crew),
           const SizedBox(height: 10),
-          if (control.hasCurrentState) _HealthCard(health: state.health)
+          if (control.hasCurrentState) _HealthCard(health: state.health, ts: state.ts)
           else const Text('Core health unavailable'),
           const SizedBox(height: 20),
           if (!pairing.isPaired)
@@ -221,11 +221,22 @@ class _RiderCard extends StatelessWidget {
 
 class _HealthCard extends StatelessWidget {
   final HealthState health;
-  const _HealthCard({required this.health});
+  final DateTime ts;
+  const _HealthCard({required this.health, required this.ts});
+
+  static String _ago(DateTime t) {
+    final s = DateTime.now().difference(t).inSeconds;
+    return s < 60 ? '${s}s ago' : '${s ~/ 60}m ago';
+  }
 
   @override
   Widget build(BuildContext context) {
     final warm = health.thermalState != 'nominal';
+    // No network transport diagnostics exist in the wire schema yet (this
+    // was a hardcoded 'LAN' before — a fabricated value the Core never
+    // reported). Showing when the Core's state last actually arrived is
+    // real, Core-reported data instead.
+    final stale = DateTime.now().difference(ts) > const Duration(seconds: 5);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -245,7 +256,7 @@ class _HealthCard extends StatelessWidget {
             ),
           ),
           _VDivider(),
-          const Expanded(child: _HealthStat(label: 'NETWORK', value: 'LAN', warn: false)),
+          Expanded(child: _HealthStat(label: 'UPDATED', value: _ago(ts), warn: stale)),
         ],
       ),
     );

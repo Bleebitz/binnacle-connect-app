@@ -135,7 +135,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: ListView(
           padding: const EdgeInsets.only(bottom: 24),
           children: [
-            if (control.hasCurrentState) _TopBar(health: state.health)
+            if (control.hasCurrentState) _TopBar(health: state.health, ts: state.ts)
             else const ListTile(title: Text('Connect'), subtitle: Text('Core health unavailable')),
             _PresetRow(
               selected: _preset,
@@ -311,7 +311,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
 class _TopBar extends StatelessWidget {
   final HealthState health;
-  const _TopBar({required this.health});
+  final DateTime ts;
+  const _TopBar({required this.health, required this.ts});
+
+  static String _stateAge(DateTime t) {
+    final s = DateTime.now().difference(t).inSeconds;
+    return s < 60 ? '${s}s' : '${s ~/ 60}m';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -323,8 +329,12 @@ class _TopBar extends StatelessWidget {
           Text('Connect', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 18)),
           Row(
             children: [
+              // No network transport diagnostics exist in the wire schema
+              // yet (this read a hardcoded '⇅ LAN' before — a fabricated
+              // value the Core never reported). State-message age is real,
+              // Core-reported data instead.
               Text(
-                '◉ ${health.tempC.toStringAsFixed(0)}°C   ▮ ${health.storageFreePct}%   ⇅ LAN',
+                '◉ ${health.tempC.toStringAsFixed(0)}°C   ▮ ${health.storageFreePct}%   ⟳ ${_stateAge(ts)}',
                 style: BinnacleTheme.mono(size: 10),
               ),
               const SizedBox(width: 10),
