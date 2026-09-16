@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,7 +11,13 @@ import '../theme/binnacle_theme.dart';
 import '../widgets/eptz_video_view.dart';
 import '../widgets/gauge_painter.dart';
 import '../widgets/mob_alert_banner.dart';
+import '../widgets/simulated_wake_view.dart';
 
+// Layout and componentry follow the retro-hero / technical-instrument UX
+// prototype's capture screen (screen-capture) as closely as native widgets
+// allow: topbar + health readout, preset pills, a full-width link bar, the
+// rec-state pill, a 16:9 viewport with HUD tags / zoom column / capture row,
+// the go-live bar, and the quick-adjust handle. See spotter-v5 prototype.
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({super.key});
 
@@ -20,6 +28,44 @@ class CaptureScreen extends StatefulWidget {
 class _CaptureScreenState extends State<CaptureScreen> {
   final _webrtc = WebRtcService();
   bool _mobActive = false;
+  bool _flash = false;
+  String? _saveToast;
+  Timer? _toastTimer;
+  String _preset = 'wakesurf';
+
+  @override
+  void dispose() {
+    _toastTimer?.cancel();
+    super.dispose();
+  }
+
+  void _fireFlash() {
+    setState(() => _flash = true);
+    Future.delayed(const Duration(milliseconds: 220), () {
+      if (mounted) setState(() => _flash = false);
+    });
+  }
+
+  void _showSaveToast(String text) {
+    _toastTimer?.cancel();
+    setState(() => _saveToast = text);
+    _toastTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _saveToast = null);
+    });
+  }
+
+  /// A spectator's allowed command set is empty by design (§3) — every
+  /// command throws CommandRejected until this device is paired as crew or
+  /// owner. That's correct for a real deployment, but left uncaught it kills
+  /// the rest of the tap handler (e.g. the acknowledge button's setState
+  /// never runs), so this demo build stays usable without a paired device.
+  static void _send(void Function() action) {
+    try {
+      action();
+    } on CommandRejected {
+      // Expected pre-pairing; local UI still reflects the attempted action.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,87 +74,161 @@ class _CaptureScreenState extends State<CaptureScreen> {
     final state = control.state;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Connect'),
-        actions: [_LinkBadge(status: control.status, lastSeen: control.lastSeen)],
-      ),
+      backgroundColor: BinnacleColors.navyDeep,
       body: SafeArea(
+        bottom: false,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.only(bottom: 24),
           children: [
-            _PresetRow(onPreset: (p) => control.loadPreset(p, actor: 'levi')),
-            const SizedBox(height: 12),
-            _RecordingStateCard(capture: state.capture, triggerMode: state.triggerMode),
-            const SizedBox(height: 12),
-            AspectRatio(
-              aspectRatio: 4 / 5,
-              child: Stack(
+            _TopBar(health: state.health),
+            _PresetRow(
+              selected: _preset,
+              onPreset: (p) {
+                setState(() => _preset = p);
+                _send(() => control.loadPreset(p, actor: 'levi'));
+              },
+            ),
+            const SizedBox(height: 2),
+            _LinkBar(status: control.status, lastSeen: control.lastSeen, seq: state.seq),
+            if (state.framing.isManual) ...[
+              const SizedBox(height: 9),
+              _ManualFramingFlag(onHandBack: () => _send(() => control.setControlMode('ai', actor: 'levi'))),
+            ],
+            const SizedBox(height: 9),
+            _RecStateCard(capture: state.capture),
+            const SizedBox(height: 9),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Stack(
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    EptzVideoView(
+                      service: _webrtc,
+                      simulatedBuilder: (_) => const Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          SimulatedWakeView(),
+                          Center(
+                            child: Icon(Icons.gps_fixed, color: BinnacleColors.tealBright, size: 36),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Positioned(
+                      top: 9,
+                      left: 9,
+                      child: _HudTag(text: '${state.triggerMode.toUpperCase()} TRIGGER'),
+                    ),
+                    const Positioned(top: 9, right: 9, child: _HudTag(text: '16:9 · 1080p', dim: true)),
+                    Positioned(left: 9, bottom: 54, child: _TelemetryChip(telemetry: telemetry)),
+                    Positioned(
+                      right: 9,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: _ZoomColumn(
+                          zoom: state.framing.zoom,
+                          maxZoom: state.framing.maxZoom,
+                          onZoomIn: () => _send(() => control.nudgeZoom(0.5, actor: 'levi')),
+                          onZoomOut: () => _send(() => control.nudgeZoom(-0.5, actor: 'levi')),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 9,
+                      child: _CaptureRow(
+                        manual: state.framing.isManual,
+                        onSnapshot: () {
+                          _send(() => control.snapshot(actor: 'levi'));
+                          _fireFlash();
+                          _showSaveToast('Snapshot saved');
+                        },
+                        onHighlight: () {
+                          _send(() => control.saveHighlight(
+                                preS: state.capture.preRollSeconds,
+                                postS: state.capture.postRollSeconds,
+                                actor: 'levi',
+                              ));
+                          _showSaveToast('Highlight saved');
+                        },
+                        onOrient: () => _send(() => control.setControlMode(
+                              state.framing.isManual ? 'ai' : 'manual',
+                              actor: 'levi',
+                            )),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 120),
+                          opacity: _flash ? 0.85 : 0,
+                          child: Container(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 72,
+                      child: IgnorePointer(
+                        child: Center(
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 200),
+                            opacity: _saveToast == null ? 0 : 1,
+                            child: _SaveToast(text: _saveToast ?? ''),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: MobAlertBanner(
+                        active: _mobActive,
+                        lat: '36.02083° N',
+                        lon: '114.74215° W',
+                        headingDegrees: 128,
+                        onAcknowledge: () {
+                          _send(() => control.acknowledgeMob(actor: 'levi'));
+                          setState(() => _mobActive = false);
+                        },
+                      ),
+                    ),
+                  ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 9),
+            if (control.canBroadcast('boat')) _GoLiveBar(control: control, broadcast: state.broadcast),
+            const SizedBox(height: 11),
+            _QuickAdjustHandle(
+              control: control,
+              triggerMode: state.triggerMode,
+              capture: state.capture,
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Column(
                 children: [
-                  EptzVideoView(
-                    service: _webrtc,
-                    simulatedBuilder: (_) => Container(
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Color(0xFF0F3244), Color(0xFF081A25)],
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Center(
-                        child: Icon(Icons.gps_fixed, color: BinnacleColors.tealBright, size: 40),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 10,
-                    bottom: 10,
-                    child: _TelemetryChip(telemetry: telemetry),
-                  ),
-                  Positioned(
-                    right: 10,
-                    bottom: 10,
-                    child: FloatingActionButton.small(
-                      heroTag: 'snapshot',
-                      backgroundColor: BinnacleColors.navyRaised,
-                      onPressed: () => control.snapshot(actor: 'levi'),
-                      child: const Icon(Icons.camera_alt_outlined, size: 18),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: MobAlertBanner(
-                          active: _mobActive,
-                          lat: '36.02083° N',
-                          lon: '114.74215° W',
-                          headingDegrees: 128,
-                          onAcknowledge: () {
-                            control.acknowledgeMob(actor: 'levi');
-                            setState(() => _mobActive = false);
-                          },
-                        ),
-                      ),
+                  _ArmSwitchRow(control: control, capture: state.capture),
+                  const SizedBox(height: 12),
+                  _SafetyCard(safety: state.safety),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => setState(() => _mobActive = !_mobActive),
+                      icon: const Icon(Icons.warning_amber_rounded),
+                      label: const Text('Simulate fall alert (demo)'),
                     ),
                   ),
                 ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (state.framing.isManual) const _ManualFramingFlag(),
-            const SizedBox(height: 8),
-            _ArmSwitchRow(control: control, capture: state.capture),
-            const SizedBox(height: 12),
-            _SafetyCard(safety: state.safety), // always locked — see model
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => setState(() => _mobActive = !_mobActive),
-                icon: const Icon(Icons.warning_amber_rounded),
-                label: const Text('Simulate fall alert (demo)'),
               ),
             ),
           ],
@@ -118,77 +238,645 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 }
 
-class _LinkBadge extends StatelessWidget {
-  final LinkStatus status;
-  final DateTime lastSeen;
-  const _LinkBadge({required this.status, required this.lastSeen});
+class _TopBar extends StatelessWidget {
+  final HealthState health;
+  const _TopBar({required this.health});
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = switch (status) {
-      LinkStatus.simulated => ('SIMULATED', BinnacleColors.slate),
-      LinkStatus.connecting => ('CONNECTING', BinnacleColors.amber),
-      LinkStatus.connected => ('CONNECTED', BinnacleColors.tealBright),
-      LinkStatus.stale => ('NOT RESPONDING', BinnacleColors.amber),
-      LinkStatus.offline => ('OFFLINE — STILL RECORDING', BinnacleColors.orange),
-    };
     return Padding(
-      padding: const EdgeInsets.only(right: 14),
-      child: Center(child: Text(label, style: BinnacleTheme.mono(size: 9, color: color, weight: FontWeight.w700))),
+      padding: const EdgeInsets.fromLTRB(18, 15, 18, 9),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text('Connect', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 18)),
+          Row(
+            children: [
+              Text(
+                '◉ ${health.tempC.toStringAsFixed(0)}°C   ▮ ${health.storageFreePct}%   ⇅ LAN',
+                style: BinnacleTheme.mono(size: 10),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: BinnacleColors.navyRaised,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
+                ),
+                child: const Icon(Icons.person_outline, size: 17, color: BinnacleColors.slate),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _PresetRow extends StatelessWidget {
+  final String selected;
   final void Function(String) onPreset;
-  const _PresetRow({required this.onPreset});
-  static const presets = ['wakesurf', 'wakeboard', 'ski', 'tube', 'swim', 'cruise'];
+  const _PresetRow({required this.selected, required this.onPreset});
+
+  static const presets = [
+    ('wakesurf', 'Wakesurf'),
+    ('wakeboard', 'Wakeboard'),
+    ('ski', 'Ski'),
+    ('tube', 'Tube'),
+    ('swim', 'Swim'),
+    ('cruise', 'Cruising'),
+  ];
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 34,
       child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 18),
         scrollDirection: Axis.horizontal,
         itemCount: presets.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) => ActionChip(
-          label: Text(presets[i]),
-          onPressed: () => onPreset(presets[i]),
+        separatorBuilder: (_, __) => const SizedBox(width: 7),
+        itemBuilder: (_, i) {
+          final (id, label) = presets[i];
+          final on = id == selected;
+          return GestureDetector(
+            onTap: () => onPreset(id),
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+              decoration: BoxDecoration(
+                color: on ? BinnacleColors.teal.withValues(alpha: 0.1) : BinnacleColors.navy,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: on ? BinnacleColors.teal : BinnacleColors.offWhite.withValues(alpha: 0.09)),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: on ? BinnacleColors.tealBright : BinnacleColors.slate,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _LinkBar extends StatelessWidget {
+  final LinkStatus status;
+  final DateTime lastSeen;
+  final int seq;
+  const _LinkBar({required this.status, required this.lastSeen, required this.seq});
+
+  @override
+  Widget build(BuildContext context) {
+    final (title, sub, dot, border, bg) = switch (status) {
+      LinkStatus.simulated => (
+          'Simulated',
+          'No Vision device paired',
+          BinnacleColors.slateDim,
+          BinnacleColors.offWhite.withValues(alpha: 0.09),
+          BinnacleColors.navy,
+        ),
+      LinkStatus.connecting => (
+          'Connecting…',
+          'Reaching Vision',
+          BinnacleColors.amber,
+          BinnacleColors.offWhite.withValues(alpha: 0.09),
+          BinnacleColors.navy,
+        ),
+      LinkStatus.connected => (
+          'Connected',
+          'Vision is online',
+          BinnacleColors.tealBright,
+          BinnacleColors.teal.withValues(alpha: 0.45),
+          BinnacleColors.navy,
+        ),
+      LinkStatus.stale => (
+          'Not responding',
+          'Last seen ${_ago(lastSeen)}',
+          BinnacleColors.amber,
+          BinnacleColors.amber,
+          BinnacleColors.amber.withValues(alpha: 0.07),
+        ),
+      LinkStatus.offline => (
+          'Offline — still recording',
+          'Vision keeps capturing without the link',
+          BinnacleColors.orange,
+          BinnacleColors.orange,
+          BinnacleColors.orange.withValues(alpha: 0.08),
+        ),
+    };
+    return Container(
+      margin: const EdgeInsets.fromLTRB(18, 0, 18, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          _PulsingDot(color: dot, pulsing: status == LinkStatus.stale || status == LinkStatus.offline),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5)),
+                Text(sub, style: TextStyle(fontSize: 10.5, color: BinnacleColors.slate)),
+              ],
+            ),
+          ),
+          Text('seq $seq', style: BinnacleTheme.mono(size: 9.5, color: BinnacleColors.slateDim)),
+        ],
+      ),
+    );
+  }
+
+  static String _ago(DateTime t) {
+    final s = DateTime.now().difference(t).inSeconds;
+    return s < 60 ? '${s}s ago' : '${s ~/ 60}m ago';
+  }
+}
+
+class _PulsingDot extends StatefulWidget {
+  final Color color;
+  final bool pulsing;
+  const _PulsingDot({required this.color, this.pulsing = false});
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.pulsing) _c.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PulsingDot old) {
+    super.didUpdateWidget(old);
+    if (widget.pulsing && !_c.isAnimating) {
+      _c.repeat(reverse: true);
+    } else if (!widget.pulsing) {
+      _c.stop();
+      _c.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) => Opacity(
+        opacity: widget.pulsing ? 1 - (_c.value * 0.7) : 1,
+        child: Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
         ),
       ),
     );
   }
 }
 
-class _RecordingStateCard extends StatelessWidget {
-  final CaptureState capture;
-  final String triggerMode;
-  const _RecordingStateCard({required this.capture, required this.triggerMode});
+class _ManualFramingFlag extends StatelessWidget {
+  final VoidCallback onHandBack;
+  const _ManualFramingFlag({required this.onHandBack});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.symmetric(horizontal: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: BinnacleColors.navy,
+        color: BinnacleColors.amber.withValues(alpha: 0.1),
+        border: Border.all(color: BinnacleColors.amber),
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: Row(children: [
+        const Icon(Icons.pan_tool_alt_outlined, color: BinnacleColors.amber, size: 15),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text('MANUAL FRAMING — AI is not controlling the shot',
+              style: TextStyle(color: BinnacleColors.amber, fontSize: 11, fontWeight: FontWeight.w700)),
+        ),
+        GestureDetector(
+          onTap: onHandBack,
+          child: Text('Hand back to AI',
+              style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.amber, weight: FontWeight.w600)),
+        ),
+      ]),
+    );
+  }
+}
+
+class _RecStateCard extends StatelessWidget {
+  final CaptureState capture;
+  const _RecStateCard({required this.capture});
+
+  @override
+  Widget build(BuildContext context) {
+    final recording = capture.recording;
+    final (bufLabel, bufFill, bufColor) = switch (capture.bufferHealth) {
+      'recovering' => ('BUFFER RECOVERING', 0.5, BinnacleColors.amber),
+      'degraded' => ('BUFFER DEGRADED', 0.2, BinnacleColors.orange),
+      _ => ('BUFFER OK', 1.0, BinnacleColors.tealBright),
+    };
+    final borderColor = recording ? BinnacleColors.orange : BinnacleColors.offWhite.withValues(alpha: 0.09);
+    final bgColor = recording ? BinnacleColors.orange.withValues(alpha: 0.08) : BinnacleColors.navy;
+    final dotColor = recording ? BinnacleColors.orange : BinnacleColors.tealBright;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        border: Border.all(color: borderColor),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: capture.recording ? BinnacleColors.orange : BinnacleColors.slateDim, width: 1),
       ),
       child: Row(
         children: [
-          Icon(Icons.circle, size: 10, color: capture.recording ? BinnacleColors.orange : BinnacleColors.slateDim),
-          const SizedBox(width: 10),
+          _PulsingDot(color: dotColor, pulsing: recording),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  recording ? 'Recording — pass ${capture.passNumber}' : 'Buffering',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 13.5),
+                ),
+                Text(
+                  recording ? 'trigger: ${capture.triggerSource}' : 'Ready — nothing missed',
+                  style: BinnacleTheme.mono(size: 10.5),
+                ),
+              ],
+            ),
+          ),
           Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(capture.recording ? 'Recording — pass ${capture.passNumber}' : 'Buffering',
-                  style: Theme.of(context).textTheme.titleMedium),
-              Text('trigger: ${capture.triggerSource} · buffer ${capture.bufferHealth}',
-                  style: BinnacleTheme.mono(size: 10)),
+              Text(bufLabel, style: BinnacleTheme.mono(size: 9.5, color: BinnacleColors.tealBright)),
+              const SizedBox(height: 4),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: SizedBox(
+                  width: 48,
+                  height: 3,
+                  child: LinearProgressIndicator(
+                    value: bufFill,
+                    backgroundColor: BinnacleColors.offWhite.withValues(alpha: 0.09),
+                    valueColor: AlwaysStoppedAnimation(bufColor),
+                  ),
+                ),
+              ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _HudTag extends StatelessWidget {
+  final String text;
+  final bool dim;
+  const _HudTag({required this.text, this.dim = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: BinnacleColors.navyDeep.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: Text(text, style: BinnacleTheme.mono(size: 9.5, color: dim ? BinnacleColors.slate : BinnacleColors.offWhite)),
+    );
+  }
+}
+
+class _ZoomColumn extends StatelessWidget {
+  final double zoom;
+  final double maxZoom;
+  final VoidCallback onZoomIn;
+  final VoidCallback onZoomOut;
+  const _ZoomColumn({required this.zoom, required this.maxZoom, required this.onZoomIn, required this.onZoomOut});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget circleBtn(String label, VoidCallback? onTap) => GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: BinnacleColors.navyDeep.withValues(alpha: 0.62),
+              shape: BoxShape.circle,
+              border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: onTap == null ? 0.08 : 0.25)),
+            ),
+            child: Text(label,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: onTap == null ? BinnacleColors.slateDim : BinnacleColors.offWhite,
+                )),
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 9),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          circleBtn('+', zoom < maxZoom ? onZoomIn : null),
+          const SizedBox(height: 7),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: BinnacleColors.navyDeep.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Text('${zoom.toStringAsFixed(1)}×', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.offWhite)),
+          ),
+          const SizedBox(height: 7),
+          circleBtn('−', zoom > 1.0 ? onZoomOut : null),
+        ],
+      ),
+    );
+  }
+}
+
+class _CaptureRow extends StatelessWidget {
+  final bool manual;
+  final VoidCallback onSnapshot;
+  final VoidCallback onHighlight;
+  final VoidCallback onOrient;
+  const _CaptureRow({
+    required this.manual,
+    required this.onSnapshot,
+    required this.onHighlight,
+    required this.onOrient,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _CapSideButton(icon: Icons.camera_alt_outlined, onTap: onSnapshot),
+        const SizedBox(width: 20),
+        GestureDetector(
+          onTap: onHighlight,
+          child: Container(
+            width: 60,
+            height: 60,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: BinnacleColors.teal,
+              shape: BoxShape.circle,
+              border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.85), width: 3),
+            ),
+            child: const Text(
+              'SAVE\nHIGHLIGHT',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: 'Space Grotesk',
+                fontWeight: FontWeight.w700,
+                fontSize: 10,
+                height: 1.15,
+                color: BinnacleColors.navyDeep,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 20),
+        _CapSideButton(icon: Icons.crop_rotate_outlined, onTap: onOrient, active: manual),
+      ],
+    );
+  }
+}
+
+class _CapSideButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool active;
+  const _CapSideButton({required this.icon, required this.onTap, this.active = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 42,
+        height: 42,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: BinnacleColors.navyDeep.withValues(alpha: 0.62),
+          shape: BoxShape.circle,
+          border: Border.all(color: active ? BinnacleColors.tealBright : BinnacleColors.offWhite.withValues(alpha: 0.3)),
+        ),
+        child: Icon(icon, size: 18, color: active ? BinnacleColors.tealBright : BinnacleColors.offWhite),
+      ),
+    );
+  }
+}
+
+class _SaveToast extends StatelessWidget {
+  final String text;
+  const _SaveToast({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: BinnacleColors.teal.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontFamily: 'Space Grotesk',
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+          color: BinnacleColors.navyDeep,
+        ),
+      ),
+    );
+  }
+}
+
+class _GoLiveBar extends StatelessWidget {
+  final ControlChannelService control;
+  final BroadcastState broadcast;
+  const _GoLiveBar({required this.control, required this.broadcast});
+
+  @override
+  Widget build(BuildContext context) {
+    final live = broadcast.live;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: live ? BinnacleColors.orange.withValues(alpha: 0.08) : BinnacleColors.navy,
+        border: Border.all(color: live ? BinnacleColors.orange : BinnacleColors.offWhite.withValues(alpha: 0.09)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          _PulsingDot(color: live ? BinnacleColors.orange : BinnacleColors.slateDim, pulsing: live),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(live ? 'Live · ${broadcast.viewers} watching' : 'Go live',
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                Text(
+                  live ? 'Link quality: ${broadcast.linkQuality}' : 'Share this view — on the boat or to the world',
+                  style: TextStyle(fontSize: 10.5, color: BinnacleColors.slate),
+                ),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: () => _CaptureScreenState._send(() => live
+                ? control.stopBroadcast(actor: 'levi')
+                : control.startBroadcast('boat', actor: 'levi')),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: live ? BinnacleColors.orange : BinnacleColors.teal),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Text(
+                live ? 'STOP' : 'START',
+                style: TextStyle(
+                  fontFamily: 'Space Grotesk',
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11,
+                  color: live ? BinnacleColors.orange : BinnacleColors.tealBright,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickAdjustHandle extends StatelessWidget {
+  final ControlChannelService control;
+  final String triggerMode;
+  final CaptureState capture;
+  const _QuickAdjustHandle({required this.control, required this.triggerMode, required this.capture});
+
+  static const _modes = ['rider', 'gps', 'swimmer', 'onboard'];
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _openSheet(context),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 18),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: BinnacleColors.navy,
+          border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Quick adjust', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text('Change mode & timing without leaving the water',
+                      style: TextStyle(fontSize: 10.5, color: BinnacleColors.slate)),
+                ],
+              ),
+            ),
+            Text(
+              '${triggerMode.toUpperCase()} · −${capture.preRollSeconds}/+${capture.postRollSeconds}',
+              style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.tealBright),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: BinnacleColors.navy,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 26),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(color: BinnacleColors.slateDim, borderRadius: BorderRadius.circular(3)),
+              ),
+            ),
+            Text('Trigger mode', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text('What tells Vision to start recording a pass',
+                style: TextStyle(fontSize: 11, color: BinnacleColors.slate)),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _modes
+                  .map((m) => ChoiceChip(
+                        label: Text(m),
+                        selected: m == triggerMode,
+                        onSelected: (_) {
+                          _CaptureScreenState._send(() => control.setTriggerMode(m, actor: 'levi'));
+                          Navigator.of(sheetContext).pop();
+                        },
+                      ))
+                  .toList(),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Pre-roll ${capture.preRollSeconds}s · post-roll ${capture.postRollSeconds}s — set per preset.',
+              style: TextStyle(fontSize: 10.5, color: BinnacleColors.slateDim),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -214,34 +902,6 @@ class _TelemetryChip extends StatelessWidget {
   }
 }
 
-class _ManualFramingFlag extends StatelessWidget {
-  const _ManualFramingFlag();
-
-  @override
-  Widget build(BuildContext context) {
-    final control = context.read<ControlChannelService>();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: BinnacleColors.amber.withValues(alpha: 0.1),
-        border: Border.all(color: BinnacleColors.amber),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(children: [
-        const Icon(Icons.pan_tool_alt_outlined, color: BinnacleColors.amber, size: 16),
-        const SizedBox(width: 8),
-        const Expanded(
-            child: Text('MANUAL FRAMING — AI is not controlling the shot',
-                style: TextStyle(color: BinnacleColors.amber, fontSize: 11, fontWeight: FontWeight.w700))),
-        TextButton(
-          onPressed: () => control.setControlMode('ai', actor: 'levi'),
-          child: const Text('Hand back to AI'),
-        ),
-      ]),
-    );
-  }
-}
-
 class _ArmSwitchRow extends StatelessWidget {
   final ControlChannelService control;
   final CaptureState capture;
@@ -259,7 +919,8 @@ class _ArmSwitchRow extends StatelessWidget {
           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
           : Switch(
               value: capture.armed,
-              onChanged: (v) => v ? control.arm(actor: 'levi') : control.disarm(actor: 'levi'),
+              onChanged: (v) => _CaptureScreenState._send(
+                  () => v ? control.arm(actor: 'levi') : control.disarm(actor: 'levi')),
             ),
     );
   }

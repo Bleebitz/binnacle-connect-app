@@ -18,8 +18,9 @@ void main() {
     expect(find.text('Crew'), findsWidgets);
     expect(find.text('Settings'), findsWidgets);
 
-    // Starts on the Capture screen — its app bar title is visible.
-    expect(find.widgetWithText(AppBar, 'Connect'), findsOneWidget);
+    // Starts on the Capture screen — its custom topbar brand text is
+    // visible (a styled Text, not a native AppBar — see capture_screen.dart).
+    expect(find.text('Connect'), findsOneWidget);
   });
 
   testWidgets('Navigating to Settings shows pairing status',
