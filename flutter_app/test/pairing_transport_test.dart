@@ -24,7 +24,7 @@ void main() {
     http.Request? captured;
     final transport = HttpPairingTransport(
       client: MockClient((req) async {
-        captured = req as http.Request;
+        captured = req;
         return http.Response(
           jsonEncode({
             'credential_id': 'cred-1',
