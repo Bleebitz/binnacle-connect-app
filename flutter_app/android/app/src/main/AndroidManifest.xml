@@ -6,6 +6,13 @@
          over to a release build, so it has to be declared here too or a
          release build silently has no network access. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- QR pairing scans a physical label on the Vision unit (see
+         pairing_screen.dart) — the mobile_scanner plugin requests this at
+         runtime on Android 6+, but the manifest declaration is required
+         regardless. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <application
         android:label="binnacle_connect"
         android:name="${applicationName}"

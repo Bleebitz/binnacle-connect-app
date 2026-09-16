@@ -141,6 +141,17 @@ class DeviceCredential {
         // bearerToken intentionally absent
       };
 
+  /// Full representation INCLUDING the bearer secret — for round-tripping
+  /// through SecureCredentialStore (an OS keystore) only. Never log this,
+  /// never send it anywhere but secure local storage — that's the entire
+  /// reason toJsonSafe() exists as the separate, deliberately-redacted
+  /// default for everything else.
+  Map<String, dynamic> toStorageJson() => {
+        ...toJsonSafe(),
+        'cert_fingerprint': certFingerprint,
+        'token': bearerToken,
+      };
+
   factory DeviceCredential.fromJson(Map<String, dynamic> j) => DeviceCredential(
         credentialId: j['credential_id'],
         deviceId: j['device_id'],
