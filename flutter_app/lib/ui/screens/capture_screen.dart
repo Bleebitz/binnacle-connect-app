@@ -9,6 +9,7 @@ import '../../core/models/vessel_state.dart';
 import '../../core/services/control_channel_service.dart';
 import '../../core/services/command_result.dart';
 import '../../core/services/mob_alert_state.dart';
+import '../../core/services/pairing_service.dart';
 import '../../core/services/telemetry_socket.dart';
 import '../../core/services/webrtc_service.dart';
 import '../theme/binnacle_theme.dart';
@@ -32,7 +33,7 @@ class CaptureScreen extends StatefulWidget {
 }
 
 class _CaptureScreenState extends State<CaptureScreen> {
-  final _webrtc = WebRtcService();
+  late final WebRtcService _webrtc;
   bool _flash = false;
   String? _saveToast;
   bool _saveToastIsError = false;
@@ -40,8 +41,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
   String _preset = 'wakesurf';
 
   @override
+  void initState() {
+    super.initState();
+    _webrtc = WebRtcService(
+      renderer: AppConfig.isDemo
+          ? SimulatedVideoRenderer()
+          : RtcVideoRenderer(control: context.read<ControlChannelService>()),
+    );
+  }
+
+  @override
   void dispose() {
     _toastTimer?.cancel();
+    _webrtc.dispose();
     super.dispose();
   }
 
@@ -126,7 +138,21 @@ class _CaptureScreenState extends State<CaptureScreen> {
     final control = context.watch<ControlChannelService>();
     final telemetry = context.watch<TelemetrySocket>();
     final mobAlert = context.watch<MobAlertState>();
+    final pairing = context.watch<PairingService>();
     final state = control.state;
+
+    // Same idempotent trigger pattern as main.dart's control.connect() call
+    // — guarded by status so it fires exactly once per real transition, not
+    // once per rebuild. Video only makes sense once the Core link itself is
+    // up; there's no point offering a video stream over a dead control
+    // channel.
+    if (!AppConfig.isDemo && control.hasCurrentState && _webrtc.status == WebRtcLinkStatus.idle) {
+      _webrtc.connectToVessel(pairing.credential!.deviceId);
+    } else if (!AppConfig.isDemo &&
+        !control.hasCurrentState &&
+        _webrtc.status != WebRtcLinkStatus.idle) {
+      _webrtc.disconnect();
+    }
 
     return Scaffold(
       backgroundColor: BinnacleColors.navyDeep,

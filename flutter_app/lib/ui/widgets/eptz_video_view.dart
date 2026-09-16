@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../core/app_config.dart';
 import '../theme/binnacle_theme.dart';
 import '../../core/services/webrtc_service.dart';
@@ -27,8 +28,28 @@ class EptzVideoView extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (AppConfig.isDemo) simulatedBuilder(context)
-            else const Center(child: Text('Live video unavailable — awaiting Core media integration')),
+            if (AppConfig.isDemo)
+              simulatedBuilder(context)
+            else
+              StreamBuilder<void>(
+                stream: service.onStatusChange,
+                builder: (context, _) => switch (service.status) {
+                  WebRtcLinkStatus.idle => const Center(
+                      child: Text('Live video unavailable — awaiting Core media integration')),
+                  WebRtcLinkStatus.connecting =>
+                    const Center(child: Text('Connecting to Vision…')),
+                  WebRtcLinkStatus.live => service.renderer.liveRenderer != null
+                      ? RTCVideoView(service.renderer.liveRenderer!)
+                      : const Center(child: Text('Live video unavailable — awaiting Core media integration')),
+                  WebRtcLinkStatus.failed => Center(
+                      child: Text(
+                        'Couldn\'t reach Vision for video'
+                        '${service.failureReason != null ? ' — ${service.failureReason}' : ''}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                },
+              ),
             if (AppConfig.isDemo)
               Positioned(
                 top: 10,

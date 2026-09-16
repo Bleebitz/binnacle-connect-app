@@ -70,6 +70,24 @@ class ControlChannelService extends ChangeNotifier {
   final Map<String, Completer<CommandResult>> _results = {};
   final Map<String, Timer> _resultTimers = {};
 
+  // WebRTC signaling — reuses this authenticated socket rather than opening
+  // a second connection. See webrtc_service.dart's RtcVideoRenderer for the
+  // client side; 'webrtc_answer'/'webrtc_ice' arrive here from the Core,
+  // 'webrtc_offer'/'webrtc_ice' go out via sendWebRtcSignal below.
+  final StreamController<Map<String, dynamic>> _webrtcSignals =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get webrtcSignals => _webrtcSignals.stream;
+
+  /// Throws [CommandRejected] under the same conditions sendCommand does —
+  /// signaling requires the same authenticated, connected link a command
+  /// does, not a separate standard.
+  void sendWebRtcSignal(String topic, Map<String, dynamic> payload) {
+    if (_channel == null || status != LinkStatus.connected || !isPaired) {
+      throw CommandRejected('link_offline');
+    }
+    _channel!.sink.add(jsonEncode({'topic': topic, 'payload': payload}));
+  }
+
   Future<CommandResult> sendConfirmed(String command, Map<String, dynamic> params,
       {Duration timeout = const Duration(seconds: 5)}) {
     final id = sendCommand(command, params);
@@ -253,6 +271,9 @@ class ControlChannelService extends ChangeNotifier {
               ? CommandOutcome.acknowledged : CommandOutcome.rejected));
         }
         notifyListeners();
+      } else if (topic == 'webrtc_answer' || topic == 'webrtc_ice') {
+        final payload = j['payload'];
+        if (payload is Map<String, dynamic>) _webrtcSignals.add(j);
       }
     } catch (_) {
       debugPrint('ControlChannelService: malformed message ignored');
@@ -379,6 +400,7 @@ class ControlChannelService extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _closeTransport();
+    _webrtcSignals.close();
     super.dispose();
   }
 }
