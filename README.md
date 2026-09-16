@@ -44,9 +44,12 @@ Verification for these increments:
   That separate test passes and is now included in CI.
 - `dart analyze`: exit 0, no errors/warnings; 44 info-level style findings.
 - Static policy audit: no findings (Windows needs `PYTHONUTF8=1`).
-- Core-mode web build passed after increment 1. Service tests and analysis
-  passed after increment 2. Build warnings mention optional Cupertino font
-  assets; no build failure.
+- Core-mode web build passed after both increments. Build warnings mention
+  optional Cupertino font assets; no web build failure.
+- Android release build reached Gradle/CMake configuration but the managed
+  Windows environment could not execute the installed NDK `clang.exe`; no APK
+  was produced. This is recorded as an environment-blocked check, not release
+  or physical-device acceptance.
 - Lockfile reconciled to the pinned Flutter SDK's dependency constraints.
 
 **Still open; BIN-32 is not Done:** real pairing transport, QR camera scanning,
