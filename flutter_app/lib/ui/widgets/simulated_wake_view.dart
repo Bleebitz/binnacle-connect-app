@@ -44,41 +44,65 @@ class _SimulatedWakeViewState extends State<SimulatedWakeView> with SingleTicker
 
   @override
   Widget build(BuildContext context) {
+    final (warmth, night) = _timeOfDayFactors(DateTime.now());
     return AnimatedBuilder(
       animation: _c,
       builder: (_, __) => CustomPaint(
-        painter: _WakeScenePainter(_c.value),
+        painter: _WakeScenePainter(_c.value, warmth: warmth, night: night),
         size: Size.infinite,
       ),
     );
   }
 }
 
+/// Real time of day, not the animation clock — this is what makes the
+/// tint context-aware rather than just another decorative cycle. Returns
+/// (warmth, night): warmth peaks at dawn and dusk (a golden-hour glow),
+/// night ramps in overnight and darkens/desaturates everything.
+(double warmth, double night) _timeOfDayFactors(DateTime now) {
+  final hour = now.hour + now.minute / 60.0;
+  double bump(double center) => math.exp(-math.pow((hour - center) / 1.5, 2).toDouble());
+  final warmth = (bump(6) + bump(18)).clamp(0.0, 1.0);
+  final distFromMidnight = math.min((hour - 0).abs(), (hour - 24).abs());
+  final night = (1 - distFromMidnight / 5).clamp(0.0, 1.0);
+  return (warmth, night);
+}
+
 class _WakeScenePainter extends CustomPainter {
   final double t;
-  _WakeScenePainter(this.t);
+  final double warmth;
+  final double night;
+  _WakeScenePainter(this.t, {required this.warmth, required this.night});
 
   @override
   void paint(Canvas canvas, Size size) {
     final horizon = size.height * 0.38;
 
+    Color tod(Color cool, Color warm, Color nightColor) =>
+        Color.lerp(Color.lerp(cool, warm, warmth), nightColor, night)!;
+
+    final skyTop = tod(const Color(0xFF13324A), const Color(0xFF6B3A2E), const Color(0xFF060B14));
+    final skyBottom = tod(const Color(0xFF1E4A63), const Color(0xFFB5602E), const Color(0xFF0A1420));
+    final waterTop = tod(const Color(0xFF0F3244), const Color(0xFF4A2A22), const Color(0xFF050F17));
+    final waterBottom = tod(const Color(0xFF081A25), const Color(0xFF1E120E), const Color(0xFF03080D));
+
     canvas.drawRect(
       Rect.fromLTWH(0, 0, size.width, horizon),
       Paint()
-        ..shader = const LinearGradient(
+        ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF13324A), Color(0xFF1E4A63)],
+          colors: [skyTop, skyBottom],
         ).createShader(Rect.fromLTWH(0, 0, size.width, horizon)),
     );
 
     canvas.drawRect(
       Rect.fromLTWH(0, horizon, size.width, size.height - horizon),
       Paint()
-        ..shader = const LinearGradient(
+        ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF0F3244), Color(0xFF081A25)],
+          colors: [waterTop, waterBottom],
         ).createShader(Rect.fromLTWH(0, horizon, size.width, size.height - horizon)),
     );
 
@@ -117,13 +141,14 @@ class _WakeScenePainter extends CustomPainter {
       canvas.drawPath(path, wakePaint);
     }
 
-    // Sun glare near the horizon, subtly pulsing.
-    final glareAlpha = 0.10 + 0.03 * math.sin(t * 2 * math.pi);
+    // Sun glare near the horizon, subtly pulsing — brighter and warmer
+    // during golden hour, all but gone at night.
+    final glareAlpha = (0.10 + 0.03 * math.sin(t * 2 * math.pi) + warmth * 0.14) * (1 - night * 0.85);
     canvas.drawCircle(
       Offset(size.width * 0.72, horizon - 4),
-      size.width * 0.09,
+      size.width * (0.09 + warmth * 0.02),
       Paint()
-        ..color = BinnacleColors.amber.withValues(alpha: glareAlpha)
+        ..color = Color.lerp(BinnacleColors.amber, const Color(0xFFFF7A3D), warmth)!.withValues(alpha: glareAlpha)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18),
     );
 
@@ -137,5 +162,6 @@ class _WakeScenePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _WakeScenePainter oldDelegate) => oldDelegate.t != t;
+  bool shouldRepaint(covariant _WakeScenePainter oldDelegate) =>
+      oldDelegate.t != t || oldDelegate.warmth != warmth || oldDelegate.night != night;
 }

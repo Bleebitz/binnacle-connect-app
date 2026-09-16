@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/wake_entry.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/glass_sheet.dart';
 
 class KingOfWakeScreen extends StatefulWidget {
   final WakeRepository repository;
@@ -113,11 +114,9 @@ class _KingOfWakeScreenState extends State<KingOfWakeScreen> {
   }
 
   void _openEntrySheet(BuildContext context) {
-    showModalBottomSheet(
+    showGlassBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: BinnacleColors.navy,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => _EntrySheet(
         discipline: _discipline,
         repository: widget.repository,

@@ -6,10 +6,12 @@ import 'package:provider/provider.dart';
 import '../../core/models/clip.dart' show ClipKind;
 import '../../core/models/vessel_state.dart';
 import '../../core/services/control_channel_service.dart';
+import '../../core/services/mob_alert_state.dart';
 import '../../core/services/telemetry_socket.dart';
 import '../../core/services/webrtc_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/eptz_video_view.dart';
+import '../widgets/glass_sheet.dart';
 import '../widgets/mob_alert_banner.dart';
 import '../widgets/simulated_wake_view.dart';
 import '../widgets/telemetry_overlay.dart';
@@ -29,7 +31,6 @@ class CaptureScreen extends StatefulWidget {
 
 class _CaptureScreenState extends State<CaptureScreen> {
   final _webrtc = WebRtcService();
-  bool _mobActive = false;
   bool _flash = false;
   String? _saveToast;
   Timer? _toastTimer;
@@ -73,6 +74,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Widget build(BuildContext context) {
     final control = context.watch<ControlChannelService>();
     final telemetry = context.watch<TelemetrySocket>();
+    final mobAlert = context.watch<MobAlertState>();
     final state = control.state;
 
     return Scaffold(
@@ -206,14 +208,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     ),
                     Positioned.fill(
                       child: MobAlertBanner(
-                        active: _mobActive,
+                        active: mobAlert.active,
                         lat: '36.02083° N',
                         lon: '114.74215° W',
                         headingDegrees: 128,
                         onAcknowledge: () {
                           _send(() => control.acknowledgeMob(actor: 'levi'));
                           context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
-                          setState(() => _mobActive = false);
+                          mobAlert.acknowledge();
                         },
                       ),
                     ),
@@ -242,7 +244,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: () => setState(() => _mobActive = !_mobActive),
+                      onPressed: () => mobAlert.active ? mobAlert.acknowledge() : mobAlert.trigger(),
                       icon: const Icon(Icons.warning_amber_rounded),
                       label: const Text('Simulate fall alert (demo)'),
                     ),
@@ -891,10 +893,8 @@ class _QuickAdjustHandle extends StatelessWidget {
   }
 
   void _openSheet(BuildContext context) {
-    showModalBottomSheet(
+    showGlassBottomSheet(
       context: context,
-      backgroundColor: BinnacleColors.navy,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (sheetContext) => Padding(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 26),
         child: Column(

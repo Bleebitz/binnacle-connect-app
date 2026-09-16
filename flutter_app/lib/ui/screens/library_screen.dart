@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/clip.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/glass_sheet.dart';
 
 /// Local, in-memory clip store for this scaffold. A real build replaces
 /// this with a repository backed by the Core's clip API — signing and GPS
@@ -236,10 +237,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
   }
 
   void _openClip(BuildContext context, Clip clip) {
-    showModalBottomSheet(
+    showGlassBottomSheet(
       context: context,
-      backgroundColor: BinnacleColors.navy,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => Padding(
         padding: const EdgeInsets.all(20),
         child: Column(

@@ -1,8 +1,11 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'core/app_config.dart';
 import 'core/services/control_channel_service.dart';
+import 'core/services/mob_alert_state.dart';
 import 'core/services/telemetry_socket.dart';
 import 'core/services/pairing_service.dart';
 import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
@@ -97,6 +100,7 @@ class BinnacleConnectApp extends StatelessWidget {
           },
         ),
 
+        ChangeNotifierProvider(create: (_) => MobAlertState()),
         ChangeNotifierProvider(create: (_) => TelemetrySocket()..startSimulated()),
         ChangeNotifierProvider(create: (_) => ClipRepository()..seedDemo()),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
@@ -128,6 +132,7 @@ class _RootShellState extends State<_RootShell> {
   Widget build(BuildContext context) {
     final clipRepo = context.watch<ClipRepository>();
     final crewRepo = context.watch<CrewRepository>();
+    final mobActive = context.watch<MobAlertState>().active;
 
     final screens = [
       const CaptureScreen(),
@@ -161,17 +166,33 @@ class _RootShellState extends State<_RootShell> {
             ),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        backgroundColor: BinnacleColors.navyDeep,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.videocam_outlined), label: 'Capture'),
-          NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Library'),
-          NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Crew'),
-          NavigationDestination(icon: Icon(Icons.emoji_events_outlined), label: 'Compete'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
-        ],
+      // Frosted glass (a real backdrop blur, not just a translucent color)
+      // plus a tint that shifts toward orange app-wide while a MOB alert is
+      // active — chrome that reacts to what's actually happening, on the
+      // one surface that's visible no matter which tab you're on.
+      bottomNavigationBar: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            color: mobActive
+                ? BinnacleColors.orange.withValues(alpha: 0.16)
+                : BinnacleColors.navyDeep.withValues(alpha: 0.72),
+            child: NavigationBar(
+              selectedIndex: _index,
+              onDestinationSelected: (i) => setState(() => _index = i),
+              backgroundColor: Colors.transparent,
+              indicatorColor: mobActive ? BinnacleColors.orange.withValues(alpha: 0.3) : null,
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.videocam_outlined), label: 'Capture'),
+                NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Library'),
+                NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Crew'),
+                NavigationDestination(icon: Icon(Icons.emoji_events_outlined), label: 'Compete'),
+                NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

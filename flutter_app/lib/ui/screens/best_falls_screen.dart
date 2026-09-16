@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/fall_entry.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/glass_sheet.dart';
 
 /// Best Falls. Two-part safety rule enforced by fall_entry.dart's
 /// FallRepository, not just by this UI — see that file's module comment.
@@ -81,11 +82,9 @@ class _BestFallsScreenState extends State<BestFallsScreen> {
   }
 
   void _openEntrySheet(BuildContext context) {
-    showModalBottomSheet(
+    showGlassBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: BinnacleColors.navy,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => _EntrySheet(repository: widget.repository),
     );
   }

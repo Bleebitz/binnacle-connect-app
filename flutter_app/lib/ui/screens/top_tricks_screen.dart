@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/trick_entry.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/glass_sheet.dart';
 
 /// Top Tricks. Community-vote-only ranking — see the design note in
 /// trick_entry.dart for why (no real trick classifier exists yet).
@@ -50,11 +51,9 @@ class _TopTricksScreenState extends State<TopTricksScreen> {
   }
 
   void _openEntrySheet(BuildContext context) {
-    showModalBottomSheet(
+    showGlassBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: BinnacleColors.navy,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => _EntrySheet(repository: widget.repository),
     );
   }
