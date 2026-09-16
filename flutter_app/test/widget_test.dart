@@ -8,56 +8,69 @@ import 'package:binnacle_connect/main.dart';
 
 void main() {
   setUp(() {
-    // The Capture screen's simulated video background animates forever
-    // (SimulatedWakeView), which would make every pumpAndSettle() below
-    // hang indefinitely. Disabling animations is also what that widget
-    // checks to respect a real device's reduce-motion setting.
+    // The Capture (Live) screen's simulated video background animates
+    // forever (SimulatedWakeView), which would make every pumpAndSettle()
+    // below hang indefinitely. Disabling animations is also what that
+    // widget checks to respect a real device's reduce-motion setting.
     TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
   });
 
-  testWidgets('App launches, renders nav, and starts on Capture',
+  testWidgets('App launches, renders the BIN-32 nav, and starts on My Boat',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
 
-    // Bottom nav renders all four destinations.
-    expect(find.text('Capture'), findsWidgets);
+    // The reorganized nav — My Boat / Live / Session / Library / Community
+    // — replaces Capture / Library / Crew / Compete / Settings. Crew and
+    // Compete moved inside Community; Settings moved behind My Boat's
+    // profile icon. None of the old five are bottom-nav tabs anymore.
+    expect(find.text('My Boat'), findsWidgets);
+    expect(find.text('Live'), findsWidgets);
+    expect(find.text('Session'), findsWidgets);
     expect(find.text('Library'), findsWidgets);
-    expect(find.text('Crew'), findsWidgets);
-    expect(find.text('Settings'), findsWidgets);
+    expect(find.text('Community'), findsWidgets);
 
-    // Starts on the Capture screen — its custom topbar brand text is
-    // visible (a styled Text, not a native AppBar — see capture_screen.dart).
-    expect(find.text('Connect'), findsOneWidget);
+    // Starts on My Boat — the boating-status dashboard is the front door
+    // now, not the camera.
+    expect(find.text('Binnacle connected'), findsOneWidget);
   });
 
-  testWidgets('Navigating to Settings shows pairing status',
+  testWidgets("My Boat's profile icon reaches Settings (no longer a bottom-nav tab)",
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
 
-    await tester.tap(find.text('Settings').last);
+    await tester.tap(find.byTooltip('Settings & account'));
     await tester.pumpAndSettle();
 
     expect(find.text('Not paired'), findsOneWidget);
   });
 
-  testWidgets('Simulated capture screen shows link badge',
+  testWidgets('Live tab shows the simulated capture screen and link badge',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
 
+    await tester.tap(find.text('Live').last);
+    await tester.pumpAndSettle();
+
+    // Its custom topbar brand text is visible (a styled Text, not a native
+    // AppBar — see capture_screen.dart).
+    expect(find.text('Connect'), findsOneWidget);
     expect(find.textContaining('SIMULATED'), findsWidgets);
   });
 
-  testWidgets('Compete tab opens the hub, King of Wake speed-class validation works live',
+  testWidgets('Community > Compete opens the hub, King of Wake speed-class validation works live',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
 
-    await tester.tap(find.text('Compete').last);
+    await tester.tap(find.text('Community').last);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Compete'));
+    await tester.pumpAndSettle();
+
     // Hub screen: all four destinations listed, none of their content shown yet.
     expect(find.text('King of Wake'), findsOneWidget);
     expect(find.text('Top Tricks'), findsOneWidget);
@@ -97,7 +110,9 @@ void main() {
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Compete').last);
+    await tester.tap(find.text('Community').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compete'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Top Tricks'));
     await tester.pumpAndSettle();
@@ -124,7 +139,9 @@ void main() {
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Compete').last);
+    await tester.tap(find.text('Community').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compete'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Best Falls'));
     await tester.pumpAndSettle();
@@ -154,7 +171,9 @@ void main() {
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Compete').last);
+    await tester.tap(find.text('Community').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compete'));
     await tester.pumpAndSettle();
 
     // Submit one trick, then check Riders reflects it — proves the pure

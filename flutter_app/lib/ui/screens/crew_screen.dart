@@ -34,6 +34,9 @@ class CrewRepository extends ChangeNotifier {
   }
 }
 
+/// Body-only content — no Scaffold/AppBar of its own, so it can be embedded
+/// as one tab of CommunityScreen rather than owning a full screen. See that
+/// file's module comment for why Crew moved off the primary bottom nav.
 class CrewScreen extends StatelessWidget {
   final CrewRepository repository;
   const CrewScreen({super.key, required this.repository});
@@ -44,15 +47,19 @@ class CrewScreen extends StatelessWidget {
       animation: repository,
       builder: (context, _) => DefaultTabController(
         length: 2,
-        child: Scaffold(
-          appBar: AppBar(
-            title: const Text('Crew'),
-            bottom: const TabBar(tabs: [Tab(text: 'Sessions'), Tab(text: 'People')]),
-          ),
-          body: TabBarView(children: [
-            _SessionsTab(sessions: repository.sessions, onReact: repository.react),
-            _PeopleTab(riders: repository.riders, onAdd: repository.addRider),
-          ]),
+        child: Column(
+          children: [
+            const Material(
+              color: Colors.transparent,
+              child: TabBar(tabs: [Tab(text: 'Sessions'), Tab(text: 'People')]),
+            ),
+            Expanded(
+              child: TabBarView(children: [
+                _SessionsTab(sessions: repository.sessions, onReact: repository.react),
+                _PeopleTab(riders: repository.riders, onAdd: repository.addRider),
+              ]),
+            ),
+          ],
         ),
       ),
     );

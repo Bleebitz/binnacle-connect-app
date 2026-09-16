@@ -9,10 +9,11 @@ import 'best_falls_screen.dart';
 import 'riders_screen.dart';
 import '../theme/binnacle_theme.dart';
 
-/// Compete hub — reached from the bottom nav. Pushes to each of the four
+/// Compete hub — one tab of CommunityScreen (see that file for why), not a
+/// primary bottom-nav destination of its own. Pushes to each of the four
 /// leaderboards. Same navigation pattern already used in settings_screen
 /// .dart (ListTile -> Navigator.push), not a new pattern invented for this
-/// screen.
+/// screen. Body-only content — no Scaffold/AppBar of its own.
 class CompeteScreen extends StatelessWidget {
   const CompeteScreen({super.key});
 
@@ -49,24 +50,21 @@ class CompeteScreen extends StatelessWidget {
       ),
     ];
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Compete')),
-      body: ListView(
-        padding: const EdgeInsets.all(12),
-        children: destinations
-            .map((d) => Card(
-                  color: BinnacleColors.navy,
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: ListTile(
-                    leading: Icon(d.$3, color: BinnacleColors.tealBright),
-                    title: Text(d.$1),
-                    subtitle: Text(d.$2, style: const TextStyle(fontSize: 11.5)),
-                    trailing: const Icon(Icons.chevron_right, size: 18),
-                    onTap: d.$4,
-                  ),
-                ))
-            .toList(),
-      ),
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: destinations
+          .map((d) => Card(
+                color: BinnacleColors.navy,
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: Icon(d.$3, color: BinnacleColors.tealBright),
+                  title: Text(d.$1),
+                  subtitle: Text(d.$2, style: const TextStyle(fontSize: 11.5)),
+                  trailing: const Icon(Icons.chevron_right, size: 18),
+                  onTap: d.$4,
+                ),
+              ))
+          .toList(),
     );
   }
 }

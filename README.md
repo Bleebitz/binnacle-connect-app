@@ -49,6 +49,39 @@ real Core and a Core build can't silently fall back to fake data:
 
 See `flutter_app/lib/core/app_config.dart` for the exact contract.
 
+## Product structure
+
+Bottom nav is **My Boat / Live / Session / Library / Community** — reorganized
+around the actual boating experience (connect → ride → review → share/
+compete) per BIN-32, replacing an earlier Capture / Library / Crew / Compete
+/ Settings layout that gave Crew and Compete the same navigational weight as
+operating the camera:
+
+- **My Boat** (`my_boat_screen.dart`) — the front door. Answers "is Binnacle
+  connected, is Vision online, is Track ready, who's riding, are we
+  recording, is storage/temp/network healthy" in one place, instead of that
+  being scattered across other screens' status bars.
+- **Live** (`capture_screen.dart`, class `CaptureScreen`) — the Vision/Track
+  interface: camera feed, framing/zoom, presets, recording, save highlight,
+  safety alerts. Same screen as before; renamed in the nav, not rewritten.
+- **Session** (`session_screen.dart`) — a chronological day-on-the-water
+  timeline (passes, highlights, falls, photos, rider changes) built from
+  real `ClipRepository` data. v1 scope, stated honestly: there's no real
+  session-boundary model yet (start/end tied to an arm/pairing cycle) — this
+  shows every captured clip as one running timeline, which is what a single
+  day actually looks like today without inventing boundaries the app can't
+  detect yet.
+- **Library** — unchanged from before this reorg (see the cinematic-feed
+  work already documented in git history).
+- **Community** (`community_screen.dart`) — Crew and the four leaderboards
+  (King of Wake, Top Tricks, Best Falls, Riders), one level down instead of
+  four separate top-level tabs. `CrewScreen` and `CompeteScreen` are now
+  body-only widgets (no Scaffold/AppBar of their own) embedded as tabs here.
+
+Settings is no longer a bottom-nav tab — it's behind My Boat's profile icon
+(account/device management isn't a primary boating activity on the same
+footing as riding, reviewing, or competing).
+
 ## What's deliberately NOT in this repo
 
 Business, legal, and program-management documents — the Charter, the Fork
@@ -68,9 +101,9 @@ by name but don't restate them.
   Tricks, Best Falls) plus the Riders aggregate.
 - `flutter build web`: succeeds; compiled output verified to contain real
   app logic (not a stub). Rendered and interacted with in a real browser —
-  every screen, not just Capture — including tapping through the Compete
-  leaderboards, favoriting a Library clip, and triggering/dismissing the
-  MOB alert.
+  every screen, not just Live — including tapping through Community's
+  Compete leaderboards, favoriting a Library clip, viewing the Session
+  timeline, and triggering/dismissing the MOB alert.
 - `flutter build apk --debug`: succeeds, both locally and in CI. The APK
   has been installed and launched on an **Android emulator** (API 36) —
   confirmed rendering correctly (including the demo-mode `Simulated`

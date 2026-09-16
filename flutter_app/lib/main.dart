@@ -10,13 +10,14 @@ import 'core/services/telemetry_socket.dart';
 import 'core/services/pairing_service.dart';
 import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
 import 'ui/screens/capture_screen.dart';
+import 'ui/screens/community_screen.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/crew_screen.dart';
 import 'core/models/trick_entry.dart';
 import 'core/models/fall_entry.dart';
 import 'core/models/wake_entry.dart'; // WakeRepository — no longer re-exported via compete_screen.dart
-import 'ui/screens/compete_hub_screen.dart';
-import 'ui/screens/settings_screen.dart';
+import 'ui/screens/my_boat_screen.dart';
+import 'ui/screens/session_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
 
 void main() {
@@ -138,15 +139,21 @@ class _RootShellState extends State<_RootShell> {
   @override
   Widget build(BuildContext context) {
     final clipRepo = context.watch<ClipRepository>();
-    final crewRepo = context.watch<CrewRepository>();
     final mobActive = context.watch<MobAlertState>().active;
 
+    // My Boat / Live / Session / Library / Community — reorganized around
+    // the actual boating experience (connect → ride → review → share/
+    // compete) per BIN-32, instead of Capture/Library/Crew/Compete/Settings
+    // giving Crew and Compete the same navigational weight as operating the
+    // camera. Settings moved behind My Boat's profile icon; Crew and the
+    // four leaderboards moved into Community — see those screens' module
+    // comments.
     final screens = [
+      MyBoatScreen(onGoLive: () => setState(() => _index = 1)),
       const CaptureScreen(),
+      const SessionScreen(),
       LibraryScreen(repository: clipRepo),
-      CrewScreen(repository: crewRepo),
-      const CompeteScreen(),
-      const SettingsScreen(),
+      const CommunityScreen(),
     ];
 
     return Scaffold(
@@ -191,11 +198,11 @@ class _RootShellState extends State<_RootShell> {
               backgroundColor: Colors.transparent,
               indicatorColor: mobActive ? BinnacleColors.orange.withValues(alpha: 0.3) : null,
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.videocam_outlined), label: 'Capture'),
+                NavigationDestination(icon: Icon(Icons.directions_boat_outlined), label: 'My Boat'),
+                NavigationDestination(icon: Icon(Icons.videocam_outlined), label: 'Live'),
+                NavigationDestination(icon: Icon(Icons.timeline_outlined), label: 'Session'),
                 NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Library'),
-                NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Crew'),
-                NavigationDestination(icon: Icon(Icons.emoji_events_outlined), label: 'Compete'),
-                NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+                NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Community'),
               ],
             ),
           ),
