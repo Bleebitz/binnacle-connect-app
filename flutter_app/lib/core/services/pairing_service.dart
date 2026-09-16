@@ -8,10 +8,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'package:basic_utils/basic_utils.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:pointycastle/export.dart' show ECPrivateKey, ECPublicKey;
 
-import '../models/credential.dart';
 import '../app_config.dart';
+import '../models/credential.dart';
 
 /// Parsed contents of the QR label on the Vision unit.
 /// binnacle://pair?d=<device_id>&h=<core_host>&f=<cert_fingerprint>
@@ -76,12 +80,21 @@ class PairingResult {
 /// Abstraction over secure key material so the app never handles raw crypto
 /// directly and Phase 2 (mTLS) can swap the implementation.
 ///
-/// PRODUCTION NOTE: the placeholder below is NOT cryptographically secure and
-/// must be replaced before any real pairing. Use a platform keystore-backed
-/// implementation — iOS Secure Enclave / Android Keystore — so the private key
-/// is generated in hardware and never becomes extractable. This class exists
-/// now so the CSR flow is already wired (§4.3a): the keypair is generated at
-/// pairing even though Phase 1 does not use it.
+/// PRODUCTION NOTE: [PlaceholderKeyMaterial] is NOT cryptographically secure
+/// and exists for tests only. [SecureKeyMaterial] is the real implementation:
+/// a genuine EC (P-256) keypair via `basic_utils`/`pointycastle`, private key
+/// persisted through the same Keychain/Keystore-backed storage as credentials
+/// (see [SecureCredentialStore]). This class exists so the CSR flow is
+/// already wired (§4.3a): the keypair is generated at pairing even though
+/// Phase 1 does not use it.
+///
+/// WHAT THIS DOES NOT DO: the private key is generated in Dart and only
+/// encrypted at rest by the OS keystore — it is NOT hardware-bound the way a
+/// true iOS Secure Enclave / Android StrongBox key is (non-extractable,
+/// never exists outside the secure element). That requires native platform
+/// channel code per-platform and is out of scope here. This is a real step
+/// up from the placeholder (an actual asymmetric keypair, not a random
+/// string), not the final hardware-backed implementation §4.3a describes.
 abstract class KeyMaterial {
   Future<String> publicKeyPem();
   Future<void> ensureKeypair();
@@ -108,9 +121,67 @@ class PlaceholderKeyMaterial implements KeyMaterial {
   }
 }
 
-/// Persists the issued credential. Production implementation must use
-/// flutter_secure_storage (iOS Keychain / Android Keystore) — NOT
-/// SharedPreferences, which is readable on a rooted device.
+/// Real keypair generation: a genuine NIST P-256 EC key via
+/// `basic_utils`/`pointycastle`, not a placeholder string. The private key is
+/// generated once, PEM-encoded, and persisted through [FlutterSecureStorage]
+/// (iOS Keychain / Android EncryptedSharedPreferences) so it survives app
+/// restarts without ever touching plain storage or crossing the network —
+/// only the public key is ever sent to the Core, in [PairingService.pair].
+class SecureKeyMaterial implements KeyMaterial {
+  static const _privateKeyKey = 'binnacle_device_private_key_v1';
+  final FlutterSecureStorage _storage;
+
+  ECPrivateKey? _private;
+  String? _publicPem;
+
+  SecureKeyMaterial({FlutterSecureStorage? storage})
+      : _storage = storage ??
+            const FlutterSecureStorage(
+              aOptions: AndroidOptions(encryptedSharedPreferences: true),
+            );
+
+  @override
+  Future<void> ensureKeypair() async {
+    if (_private != null) return;
+
+    final existing = await _storage.read(key: _privateKeyKey);
+    if (existing != null) {
+      _private = CryptoUtils.ecPrivateKeyFromPem(existing);
+      _publicPem = CryptoUtils.encodeEcPublicKeyToPem(_publicFromPrivate(_private!));
+      return;
+    }
+
+    final pair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
+    _private = pair.privateKey as ECPrivateKey;
+    final public = pair.publicKey as ECPublicKey;
+    _publicPem = CryptoUtils.encodeEcPublicKeyToPem(public);
+
+    await _storage.write(
+      key: _privateKeyKey,
+      value: CryptoUtils.encodeEcPrivateKeyToPem(_private!),
+    );
+  }
+
+  @override
+  Future<String> publicKeyPem() async {
+    await ensureKeypair();
+    return _publicPem!;
+  }
+
+  // basic_utils' PEM decode only returns the private scalar; re-derive Q
+  // (the public point) from it so a restored key can still report its
+  // public PEM without needing it stored separately.
+  ECPublicKey _publicFromPrivate(ECPrivateKey private) {
+    final q = private.parameters!.G * private.d;
+    return ECPublicKey(q, private.parameters);
+  }
+}
+
+/// Persists the issued credential. NOT SharedPreferences, which is readable
+/// on a rooted device — [SecureCredentialStore] below is the real
+/// implementation, backed by iOS Keychain / Android Keystore via
+/// flutter_secure_storage. [InMemoryCredentialStore] remains for tests,
+/// where a real platform keystore isn't available.
 abstract class CredentialStore {
   Future<DeviceCredential?> load();
   Future<void> save(DeviceCredential c);
@@ -127,16 +198,174 @@ class InMemoryCredentialStore implements CredentialStore {
   Future<void> clear() async => _c = null;
 }
 
+/// Real credential persistence — iOS Keychain / Android Keystore via
+/// flutter_secure_storage, not plain SharedPreferences (readable on a
+/// rooted device, or trivially by any other app given a backup extraction).
+/// The bearer token is the actual secret; everything else is stored
+/// alongside it in one JSON blob rather than N separate keys, since the
+/// credential is always read/written as a unit anyway.
+class SecureCredentialStore implements CredentialStore {
+  static const _key = 'binnacle_device_credential_v1';
+  final FlutterSecureStorage _storage;
+
+  SecureCredentialStore({FlutterSecureStorage? storage})
+      : _storage = storage ??
+            const FlutterSecureStorage(
+              aOptions: AndroidOptions(encryptedSharedPreferences: true),
+            );
+
+  @override
+  Future<DeviceCredential?> load() async {
+    final raw = await _storage.read(key: _key);
+    if (raw == null) return null;
+    try {
+      return DeviceCredential.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } on FormatException {
+      // Corrupt/unreadable entry — fail closed to unpaired rather than
+      // crash on launch. A real device would need this attention anyway.
+      return null;
+    }
+  }
+
+  @override
+  Future<void> save(DeviceCredential c) async {
+    await _storage.write(key: _key, value: jsonEncode(c.toStorageJson()));
+  }
+
+  @override
+  Future<void> clear() async => _storage.delete(key: _key);
+}
+
+/// Talks to the Core's pairing endpoint. Abstracted the same way
+/// [KeyMaterial] and [CredentialStore] are, so PairingService never
+/// hardcodes which transport it uses — demo mode gets [NoOpPairingTransport]
+/// (never touches the network), core mode gets [HttpPairingTransport] (a
+/// real HTTPS request). See [PairingService]'s constructor for the split.
+abstract class PairingTransport {
+  Future<PairingResult> pair(PairingTarget target, Map<String, dynamic> request);
+}
+
+/// Demo mode's transport: reports the same honest "no window open" outcome
+/// every real unpaired attempt would eventually hit, without ever opening a
+/// socket — consistent with ControlChannelService staying
+/// LinkStatus.simulated in demo mode instead of attempting wss://core.local.
+class NoOpPairingTransport implements PairingTransport {
+  @override
+  Future<PairingResult> pair(PairingTarget target, Map<String, dynamic> request) async {
+    await Future.delayed(const Duration(milliseconds: 400));
+    return const PairingResult(
+      outcome: PairingOutcome.windowClosed,
+      message: 'No Core to pair with — this build is running in demo mode. '
+          'Press the pairing button on the Vision unit, or have an owner '
+          'open a pairing window, once connected to a real Core.',
+    );
+  }
+}
+
+/// Real pairing transport: an actual HTTPS POST to the Core, with real
+/// timeout/connection-error handling — not a fabricated response.
+///
+/// ENDPOINT CONTRACT, stated honestly: POST https://<coreHost>/spotter/
+/// {deviceId}/pair, mirroring the /spotter/{deviceId}/ws path already used
+/// by ControlChannelService's WSS connection for consistency. The exact
+/// path and status-code mapping below are this client's best-effort
+/// assumption, not something verified against a live Core — there isn't
+/// one to verify against yet (see README's "No connection to real hardware
+/// exists yet"). What's real here is the client behavior: a genuine
+/// network round-trip, a bounded timeout, and status codes mapped to
+/// PairingOutcome instead of everything collapsing into "it didn't work."
+class HttpPairingTransport implements PairingTransport {
+  final http.Client _client;
+  final Duration timeout;
+
+  HttpPairingTransport({http.Client? client, this.timeout = const Duration(seconds: 10)})
+      : _client = client ?? http.Client();
+
+  @override
+  Future<PairingResult> pair(PairingTarget target, Map<String, dynamic> request) async {
+    final uri = Uri(
+      scheme: 'https',
+      host: target.coreHost,
+      path: '/spotter/${target.deviceId}/pair',
+    );
+
+    http.Response response;
+    try {
+      response = await _client
+          .post(uri, headers: const {'content-type': 'application/json'}, body: jsonEncode(request))
+          .timeout(timeout);
+    } on TimeoutException {
+      return const PairingResult(
+        outcome: PairingOutcome.unreachable,
+        message: 'Timed out reaching the Core. Check the boat Wi-Fi.',
+      );
+    } catch (_) {
+      // Covers http.ClientException (connection refused, DNS failure,
+      // certificate mismatch, ...) — every case collapses to "unreachable"
+      // for the user, but doesn't crash the pairing flow.
+      return const PairingResult(
+        outcome: PairingOutcome.unreachable,
+        message: 'Could not reach the Core. Check the boat Wi-Fi.',
+      );
+    }
+
+    switch (response.statusCode) {
+      case 200:
+      case 201:
+        try {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          return PairingResult(
+            outcome: PairingOutcome.success,
+            credential: DeviceCredential.fromJson(body),
+            unitWasUnclaimed: body['unit_was_unclaimed'] == true,
+            message: body['message'] as String?,
+          );
+        } on FormatException {
+          return const PairingResult(
+            outcome: PairingOutcome.refused,
+            message: 'The Core sent back a response this app could not understand.',
+          );
+        }
+      case 404:
+      case 425: // "too early" — no pairing window open yet
+        return const PairingResult(
+          outcome: PairingOutcome.windowClosed,
+          message: 'No pairing window is open. Press the pairing button on '
+              'the Vision unit, or ask the owner to open one from their app.',
+        );
+      case 403:
+        return const PairingResult(outcome: PairingOutcome.refused);
+      case 409:
+        return const PairingResult(outcome: PairingOutcome.alreadyPaired);
+      default:
+        return PairingResult(
+          outcome: PairingOutcome.refused,
+          message: 'The Core returned an unexpected status (${response.statusCode}).',
+        );
+    }
+  }
+}
+
 class PairingService extends ChangeNotifier {
   final KeyMaterial keyMaterial;
   final CredentialStore store;
+  final PairingTransport transport;
 
   DeviceCredential? credential;
   bool busy = false;
 
-  PairingService({KeyMaterial? keyMaterial, CredentialStore? store})
-      : keyMaterial = keyMaterial ?? PlaceholderKeyMaterial(),
-        store = store ?? InMemoryCredentialStore();
+  PairingService({KeyMaterial? keyMaterial, CredentialStore? store, PairingTransport? transport})
+      : keyMaterial = keyMaterial ?? (AppConfig.isDemo ? PlaceholderKeyMaterial() : SecureKeyMaterial()),
+        // Real persistence in both modes — demo credentials are fabricated
+        // but still need to survive an app restart for the pairing UI to be
+        // usable; InMemoryCredentialStore is a test-only double, not
+        // something main.dart should ever get by default.
+        store = store ?? SecureCredentialStore(),
+        // Demo mode must never attempt a real network request, same rule as
+        // ControlChannelService's connect() gating in main.dart — see
+        // app_config.dart. NoOpPairingTransport always reports windowClosed
+        // honestly instead of hanging or fabricating success.
+        transport = transport ?? (AppConfig.isDemo ? NoOpPairingTransport() : HttpPairingTransport());
 
   DeviceRole get role => isPaired ? credential!.role : DeviceRole.spectator; // fail closed
   bool get isPaired => credential != null && !credential!.isExpired;
@@ -166,7 +395,7 @@ class PairingService extends ChangeNotifier {
         'client_version': '0.1.0',
       };
 
-      final result = await _transport(target, request);
+      final result = await transport.pair(target, request);
       if (result.outcome == PairingOutcome.success && result.credential != null) {
         credential = result.credential;
         await store.save(result.credential!);
@@ -176,17 +405,6 @@ class PairingService extends ChangeNotifier {
       busy = false;
       notifyListeners();
     }
-  }
-
-  /// Placeholder transport. Real implementation POSTs to the Core's pairing
-  /// endpoint over TLS, pinned to target.certFingerprint from the QR.
-  Future<PairingResult> _transport(PairingTarget target, Map<String, dynamic> request) async {
-    await Future.delayed(const Duration(milliseconds: 400));
-    return const PairingResult(
-      outcome: PairingOutcome.windowClosed,
-      message: 'No Core to pair with. Press the pairing button on the Vision '
-          'unit, or have an owner open a pairing window.',
-    );
   }
 
   Future<void> unpair() async {

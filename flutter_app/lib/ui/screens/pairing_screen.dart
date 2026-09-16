@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/services/pairing_service.dart';
@@ -21,13 +22,40 @@ class PairingScreen extends StatefulWidget {
 
 class _PairingScreenState extends State<PairingScreen> {
   final _manualController = TextEditingController();
+  final _scannerController = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
   String? _error;
   bool _busy = false;
+  // Guards against firing _attemptPair for every frame while a code is in
+  // view — mobile_scanner keeps calling onDetect continuously, not once.
+  bool _scanLocked = false;
 
   @override
   void dispose() {
     _manualController.dispose();
+    _scannerController.dispose();
     super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_scanLocked || _busy) return;
+    for (final barcode in capture.barcodes) {
+      final raw = barcode.rawValue;
+      if (raw == null) continue;
+      final target = PairingTarget.tryParse(raw);
+      if (target != null) {
+        _scanLocked = true;
+        _attemptPair(target).whenComplete(() {
+          // Unlock so a second attempt (e.g. after "window closed") can
+          // re-scan the same or a different code, rather than needing to
+          // leave and re-enter this screen.
+          if (mounted) _scanLocked = false;
+        });
+        return;
+      }
+      // Not a Binnacle code (rawValue didn't parse) — keep scanning
+      // silently rather than flashing an error for every stray QR code
+      // the camera happens to see.
+    }
   }
 
   Future<void> _attemptPair(PairingTarget? target) async {
@@ -157,23 +185,47 @@ class _PairingScreenState extends State<PairingScreen> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            Container(
-              height: 220,
-              decoration: BoxDecoration(
-                color: BinnacleColors.navy,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: BinnacleColors.slateDim),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.qr_code_scanner, size: 48, color: BinnacleColors.tealBright),
-                  const SizedBox(height: 12),
-                  const Text('Scan the QR label on the Vision unit'),
-                  const SizedBox(height: 4),
-                  Text('Camera scanning not wired in this scaffold',
-                      style: BinnacleTheme.mono(size: 10, color: BinnacleColors.slateDim)),
-                ],
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                height: 260,
+                color: Colors.black,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MobileScanner(
+                      controller: _scannerController,
+                      onDetect: _onDetect,
+                      errorBuilder: (context, error, child) => _ScannerError(error: error),
+                    ),
+                    IgnorePointer(
+                      child: Center(
+                        child: Container(
+                          width: 180,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: BinnacleColors.tealBright, width: 2),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 10,
+                      child: Text(
+                        'Scan the QR label on the Vision unit',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          shadows: [Shadow(color: Colors.black, blurRadius: 6)],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 20),
@@ -281,6 +333,44 @@ class _AlreadyPairedView extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Shown in place of the camera preview when it can't start — permission
+/// denied, no camera hardware (a desktop/web dev environment), or an
+/// unsupported platform. The manual code entry below this widget on the
+/// real screen still works either way, so this never blocks pairing
+/// entirely — it just means QR isn't available right now.
+class _ScannerError extends StatelessWidget {
+  final MobileScannerException error;
+  const _ScannerError({required this.error});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPermission = error.errorCode == MobileScannerErrorCode.permissionDenied;
+    return Container(
+      color: BinnacleColors.navy,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.videocam_off_outlined, size: 36, color: BinnacleColors.slateDim),
+          const SizedBox(height: 10),
+          Text(
+            isPermission ? 'Camera permission denied' : 'Camera unavailable',
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isPermission
+                ? 'Enable camera access in system settings, or use the code below.'
+                : 'Use the manual code below instead.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: BinnacleColors.slate, fontSize: 11),
+          ),
+        ],
       ),
     );
   }

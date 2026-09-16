@@ -13,7 +13,12 @@ void main() {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final peers = <WebSocket>[];
     var commands = 0;
-    final pairing = PairingService();
+    // In-memory store: this test exercises socket/reconnect behavior, not
+    // credential persistence — PairingService now defaults to
+    // SecureCredentialStore (a real Keychain/Keystore-backed plugin), whose
+    // platform channel isn't mocked in this plain `test()` (no
+    // TestWidgetsFlutterBinding), so it must be overridden explicitly here.
+    final pairing = PairingService(store: InMemoryCredentialStore());
     pairing.credential = DeviceCredential(credentialId: 'test', deviceId: 'test',
         coreHost: 'localhost', role: DeviceRole.owner, issuedAt: DateTime.now(), bearerToken: 'test');
     final control = ControlChannelService(demo: false)..attachPairing(pairing);
@@ -78,7 +83,7 @@ void main() {
     test('Capture outcome: $outcome', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       WebSocket? peer;
-      final pairing = PairingService();
+      final pairing = PairingService(store: InMemoryCredentialStore());
       pairing.credential = DeviceCredential(credentialId: 'test', deviceId: 'test',
           coreHost: 'localhost', role: DeviceRole.owner, issuedAt: DateTime.now(),
           bearerToken: 'test-only');

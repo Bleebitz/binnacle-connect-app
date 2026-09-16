@@ -3,6 +3,7 @@
 // referenced a nonexistent MyApp class and tested nothing about this app.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:binnacle_connect/main.dart';
 
@@ -14,6 +15,13 @@ void main() {
     // widget checks to respect a real device's reduce-motion setting.
     TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
+
+    // PairingService now defaults to SecureCredentialStore (real
+    // Keychain/Keystore persistence, see pairing_service.dart), and
+    // main.dart calls restore() on launch — stub the plugin's platform
+    // channel so that read doesn't hit a real (nonexistent, in a test
+    // binding) secure storage implementation.
+    FlutterSecureStorage.setMockInitialValues({});
   });
 
   testWidgets('App launches, renders the BIN-32 nav, and starts on My Boat',
