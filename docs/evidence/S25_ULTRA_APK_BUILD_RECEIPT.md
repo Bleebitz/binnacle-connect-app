@@ -80,3 +80,29 @@ This is the standard Android debug keystore certificate — confirms the "debug-
 **No Android device was connected to this machine.** `adb devices -l` returned an empty device list. Per instructions, physical installation, launch, and device-specific verification were **not attempted** and are **not claimed**.
 
 **APK_BUILD_VERIFIED_READY_FOR_S25_INSTALL**
+
+---
+
+## Addendum — rebuild after a BIN-36 physical-device finding (2026-09-16)
+
+BIN-36 (physical acceptance on Levi's Samsung Galaxy S25 Ultra) found a real,
+reproducible layout defect: the demo-mode `SIMULATED` badge and the `16:9 ·
+1080p` HUD tag both render in the video viewport's top-right corner and
+overlapped illegibly. Not device-specific in cause (the two `Positioned`
+offsets were hardcoded near-identically in the source), but only observed
+once an actual screen was looked at. Full detail, before/after screenshots,
+and the rest of the physical acceptance test: `docs/evidence/S25_ULTRA_DEVICE_ACCEPTANCE.md`.
+
+Minimum fix applied (`flutter_app/lib/ui/screens/capture_screen.dart`),
+commit `9ce428e`. `dart analyze` and `flutter test` (47/47) re-run clean.
+**This supersedes the build above as the current artifact** — do not use
+the original checksum below for installation; the original section is kept
+verbatim above for traceability, not as instructions to follow.
+
+- **New commit SHA:** `9ce428e` (on top of `524d24e`, same branch `bin-android-s25-apk`)
+- **New APK filename:** `binnacle-connect-s25-test-arm64.apk` (same filename, rebuilt content)
+- **New APK SHA-256:** `bbb4793025152198bfc50af97742ea04f83326c795fe963ed818e601a6dcc008`
+- **Build command:** identical to above (`flutter build apk --release --split-per-abi --target-platform android-arm64`)
+- **Identity unchanged:** `com.binnacleconnect.binnacle_connect`, versionName `0.1.0`, versionCode `2001`, minSdk 24 / targetSdk 36 / compileSdk 36, `arm64-v8a` only, debug-signed (same certificate) — only the fix changed, verified via `aapt`/`apksigner` again.
+
+**APK_BUILD_VERIFIED_READY_FOR_S25_INSTALL** (superseding checksum above)
