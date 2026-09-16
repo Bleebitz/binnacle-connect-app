@@ -90,10 +90,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
             ),
             const SizedBox(height: 2),
             _LinkBar(status: control.status, lastSeen: control.lastSeen, seq: state.seq),
-            if (state.framing.isManual) ...[
-              const SizedBox(height: 9),
-              _ManualFramingFlag(onHandBack: () => _send(() => control.setControlMode('ai', actor: 'levi'))),
-            ],
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: state.framing.isManual
+                    ? Column(
+                        key: const ValueKey('manual-flag'),
+                        children: [
+                          const SizedBox(height: 9),
+                          _ManualFramingFlag(
+                              onHandBack: () => _send(() => control.setControlMode('ai', actor: 'levi'))),
+                        ],
+                      )
+                    : const SizedBox.shrink(key: ValueKey('no-flag')),
+              ),
+            ),
             const SizedBox(height: 9),
             _RecStateCard(capture: state.capture),
             const SizedBox(height: 9),
@@ -372,7 +386,9 @@ class _LinkBar extends StatelessWidget {
           BinnacleColors.orange.withValues(alpha: 0.08),
         ),
     };
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
       margin: const EdgeInsets.fromLTRB(18, 0, 18, 0),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
@@ -506,7 +522,9 @@ class _RecStateCard extends StatelessWidget {
     final bgColor = recording ? BinnacleColors.orange.withValues(alpha: 0.08) : BinnacleColors.navy;
     final dotColor = recording ? BinnacleColors.orange : BinnacleColors.tealBright;
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
       margin: const EdgeInsets.symmetric(horizontal: 18),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -648,7 +666,7 @@ class _CaptureRow extends StatelessWidget {
       children: [
         _CapSideButton(icon: Icons.camera_alt_outlined, onTap: onSnapshot),
         const SizedBox(width: 20),
-        GestureDetector(
+        _PressScale(
           onTap: onHighlight,
           child: Container(
             width: 60,
@@ -687,7 +705,7 @@ class _CapSideButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return _PressScale(
       onTap: onTap,
       child: Container(
         width: 42,
@@ -699,6 +717,39 @@ class _CapSideButton extends StatelessWidget {
           border: Border.all(color: active ? BinnacleColors.tealBright : BinnacleColors.offWhite.withValues(alpha: 0.3)),
         ),
         child: Icon(icon, size: 18, color: active ? BinnacleColors.tealBright : BinnacleColors.offWhite),
+      ),
+    );
+  }
+}
+
+/// Tactile press feedback (spring back on release) for the capture-row
+/// buttons — a plain GestureDetector's tap has no visual acknowledgment
+/// until whatever it triggers finishes, which reads as unresponsive on a
+/// touch device.
+class _PressScale extends StatefulWidget {
+  final VoidCallback onTap;
+  final Widget child;
+  const _PressScale({required this.onTap, required this.child});
+
+  @override
+  State<_PressScale> createState() => _PressScaleState();
+}
+
+class _PressScaleState extends State<_PressScale> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) => setState(() => _down = false),
+      onTapCancel: () => setState(() => _down = false),
+      child: AnimatedScale(
+        scale: _down ? 0.88 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: widget.child,
       ),
     );
   }
@@ -737,7 +788,9 @@ class _GoLiveBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final live = broadcast.live;
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
       margin: const EdgeInsets.symmetric(horizontal: 18),
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
       decoration: BoxDecoration(

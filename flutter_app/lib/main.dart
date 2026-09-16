@@ -93,7 +93,29 @@ class _RootShellState extends State<_RootShell> {
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _index, children: screens),
+      // A cross-fade + subtle scale between tabs reads far less "flat" than
+      // IndexedStack's instant swap, while keeping IndexedStack's actual
+      // point: every screen (and the state/timers it owns — recording UI,
+      // pairing flow, etc.) stays alive underneath, never rebuilt on switch.
+      body: Stack(
+        children: [
+          for (var i = 0; i < screens.length; i++)
+            IgnorePointer(
+              ignoring: i != _index,
+              child: AnimatedOpacity(
+                opacity: i == _index ? 1 : 0,
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOut,
+                child: AnimatedScale(
+                  scale: i == _index ? 1 : 0.98,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  child: screens[i],
+                ),
+              ),
+            ),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
