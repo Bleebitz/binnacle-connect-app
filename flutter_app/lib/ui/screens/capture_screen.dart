@@ -220,7 +220,20 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       left: 9,
                       child: _HudTag(text: '${state.triggerMode.toUpperCase()} TRIGGER'),
                     ),
-                    const Positioned(top: 9, right: 9, child: _HudTag(text: '16:9 · 1080p', dim: true)),
+                    // Physical-device finding (BIN-36, S25 Ultra): this tag and
+                    // EptzVideoView's demo-only SIMULATED badge both anchor to
+                    // the video viewport's top-right corner, so in demo mode
+                    // they rendered on top of each other, illegibly — on a
+                    // device this app's own design explicitly says the
+                    // SIMULATED label must never be ambiguous. Offsetting this
+                    // tag below the badge only when demo mode actually shows
+                    // one, rather than moving the badge itself, keeps
+                    // EptzVideoView's own layout untouched.
+                    Positioned(
+                      top: AppConfig.isDemo ? 44 : 9,
+                      right: 9,
+                      child: const _HudTag(text: '16:9 · 1080p', dim: true),
+                    ),
                     Positioned(left: 9, bottom: 54, child: TelemetryOverlay(telemetry: telemetry)),
                     Positioned(
                       right: 9,
