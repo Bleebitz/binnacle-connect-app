@@ -1,22 +1,25 @@
 // Best Falls leaderboard. Community-scored, with a real safety rule this
 // model enforces structurally rather than just documenting:
 //
-//   "Any clip showing a fall that caused injury, or where the rider did not
-//    signal OK, is removed. The both-arms-up 'rider OK' hand signal is the
-//    qualifying gate."
+//   "Any clip showing a fall that caused injury is removed."
 //
-// Two separate mechanisms, matching the two clauses above:
-//   1. QUALIFYING GATE, at submission. FallRepository.submit() REJECTS an
-//      entry outright if riderOkSignaled is false — it never enters the
-//      list at all. This mirrors how King of Wake's entry sheet disables
-//      Submit until a speed lands in a valid class: the invalid case can't
-//      be constructed in the first place, not merely hidden in the UI.
-//   2. POST-HOC REMOVAL, for a genuine injury discovered later. Modeled as
-//      a soft-remove (injuryFlagged = true), not a hard delete — consistent
-//      with the evidence-continuity discipline used throughout this project
-//      (nothing gets silently deleted; a removed entry stays visible as
-//      removed, with the reason, rather than vanishing). Flagged entries
-//      are excluded from the ranked board and shown separately.
+// This used to also gate submission on a second, in-app "rider signaled OK
+// (both arms up)" checkbox the SUBMITTER manually ticked next to a
+// free-typed rider name — i.e. anyone could claim anything, with no
+// connection to what actually happened on the water, and it duplicated
+// consent that belongs at account creation, not re-litigated per
+// submission. Fixed per product direction: submission now requires a real
+// captured clip (Vision or phone — see sourceClipId), and consent to
+// appear on this board lives in the account-level user agreement made at
+// sign-up (see the consent design doc in Drive), not an in-app checkbox.
+//
+// The safety mechanism that remains:
+//   POST-HOC REMOVAL, for a genuine injury discovered later. Modeled as a
+//   soft-remove (injuryFlagged = true), not a hard delete — consistent
+//   with the evidence-continuity discipline used throughout this project
+//   (nothing gets silently deleted; a removed entry stays visible as
+//   removed, with the reason, rather than vanishing). Flagged entries are
+//   excluded from the ranked board and shown separately.
 
 import 'package:flutter/foundation.dart';
 
@@ -24,7 +27,7 @@ class FallEntry {
   final String id;
   final String riderId;
   final String riderName;
-  final bool riderOkSignaled; // the qualifying gate itself
+  final String sourceClipId; // the real captured footage this entry is built from
   final int fireVotes;
   final int stokeVotes;
   final bool injuryFlagged;
@@ -34,7 +37,7 @@ class FallEntry {
     required this.id,
     required this.riderId,
     required this.riderName,
-    required this.riderOkSignaled,
+    required this.sourceClipId,
     this.fireVotes = 0,
     this.stokeVotes = 0,
     this.injuryFlagged = false,
@@ -45,7 +48,7 @@ class FallEntry {
 
   FallEntry copyWith({int? fireVotes, int? stokeVotes, bool? injuryFlagged}) => FallEntry(
         id: id, riderId: riderId, riderName: riderName,
-        riderOkSignaled: riderOkSignaled,
+        sourceClipId: sourceClipId,
         fireVotes: fireVotes ?? this.fireVotes,
         stokeVotes: stokeVotes ?? this.stokeVotes,
         injuryFlagged: injuryFlagged ?? this.injuryFlagged,
@@ -53,15 +56,16 @@ class FallEntry {
       );
 }
 
-/// Thrown when submit() is called for an entry that never had the rider-OK
-/// signal. The caller should not be able to reach this in normal UI flow —
-/// the entry sheet disables submission until the signal is confirmed — but
-/// the repository refuses it independently, the same "don't rely on the UI
-/// alone" discipline used for role enforcement in control_channel_service.
-class MissingRiderOkSignal implements Exception {
+/// Thrown when submit() is called for an entry with no real source clip.
+/// The caller should not be able to reach this in normal UI flow — the
+/// entry sheet only ever offers real clips to pick from, or a fresh import
+/// — but the repository refuses it independently, the same "don't rely on
+/// the UI alone" discipline used for role enforcement in
+/// control_channel_service.
+class MissingSourceClip implements Exception {
   @override
-  String toString() => 'MissingRiderOkSignal: cannot submit a Best Falls '
-      'entry without the rider-OK hand signal confirmed at capture.';
+  String toString() => 'MissingSourceClip: cannot submit a Best Falls entry '
+      'without a real captured clip (Vision or phone) behind it.';
 }
 
 class FallRepository extends ChangeNotifier {
@@ -69,8 +73,8 @@ class FallRepository extends ChangeNotifier {
   List<FallEntry> get entries => List.unmodifiable(_entries);
 
   void submit(FallEntry e) {
-    if (!e.riderOkSignaled) {
-      throw MissingRiderOkSignal();
+    if (e.sourceClipId.isEmpty) {
+      throw MissingSourceClip();
     }
     _entries.add(e);
     notifyListeners();

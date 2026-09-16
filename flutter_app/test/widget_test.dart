@@ -120,7 +120,7 @@ void main() {
     expect(find.text('Backroll'), findsOneWidget);
   });
 
-  testWidgets('Best Falls refuses submission without the rider-OK checkbox',
+  testWidgets('Best Falls submits from real footage, not a self-ticked checkbox',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pump(const Duration(milliseconds: 500));
@@ -132,20 +132,22 @@ void main() {
     await tester.tap(find.text('Submit a fall'));
     await tester.pumpAndSettle();
 
-    // Unticked: button disabled, warning text shown.
-    final submitFinder = find.widgetWithText(FilledButton, 'Submit');
-    expect(tester.widget<FilledButton>(submitFinder).onPressed, isNull);
-    expect(find.textContaining('qualifying gate'), findsOneWidget);
+    // The old flow (free-typed rider name + a self-ticked "rider signaled
+    // OK" checkbox) is gone entirely — regression-proof that it can't come
+    // back, since that's exactly what made it unverifiable.
+    expect(find.byType(CheckboxListTile), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Submit'), findsNothing);
 
-    // Tick the safety checkbox — button must react (same class of check as
-    // the Top Tricks regression test above).
-    await tester.tap(find.byType(CheckboxListTile));
-    await tester.pump();
-    expect(tester.widget<FilledButton>(submitFinder).onPressed, isNotNull);
-
-    await tester.tap(submitFinder);
+    // Importing real footage submits immediately — no separate consent
+    // re-ask, since that now lives in the account agreement made at
+    // sign-up, not per submission.
+    await tester.tap(find.text('Import from Vision or phone'));
     await tester.pumpAndSettle();
-    expect(find.text('Rider OK signaled'), findsOneWidget);
+
+    // The board shows the rider (from the clip, not a free-typed name) and
+    // ties the entry back to the real clip it came from.
+    expect(find.text('Levi'), findsOneWidget);
+    expect(find.textContaining('Verified capture · Imported fall clip'), findsOneWidget);
   });
 
   testWidgets('Riders aggregates points across King of Wake, Top Tricks, and Best Falls',

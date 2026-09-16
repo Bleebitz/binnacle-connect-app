@@ -32,7 +32,7 @@ class CompeteScreen extends StatelessWidget {
             builder: (_) => TopTricksScreen(repository: context.read<TrickRepository>()))),
       ),
       (
-        'Best Falls', 'Rider-OK required to enter',
+        'Best Falls', 'Submitted from real Vision/phone footage',
         Icons.videocam_outlined,
         () => Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => BestFallsScreen(repository: context.read<FallRepository>()))),

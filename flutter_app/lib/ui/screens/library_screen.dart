@@ -102,6 +102,26 @@ class ClipRepository extends ChangeNotifier {
       capturedAt: DateTime.now(),
     ));
   }
+
+  /// Demo-only stand-in for "pick a fall video off Vision's storage or the
+  /// phone's camera roll" — there's no real device/gallery picker
+  /// integration yet. This is deliberately the ONLY way Best Falls gets new
+  /// footage to submit from (besides picking an existing clip already in
+  /// the Library): real evidence, not a typed name and a self-ticked
+  /// checkbox. Returns the created clip so the caller can submit it
+  /// immediately.
+  Clip importFallClip() {
+    final clip = Clip(
+      id: 'import-${_seq++}',
+      title: 'Imported fall clip',
+      duration: const Duration(seconds: 11),
+      kind: ClipKind.fall,
+      riderId: 'levi',
+      capturedAt: DateTime.now(),
+    );
+    add(clip);
+    return clip;
+  }
 }
 
 /// A small fixed palette rather than per-clip random colors, so cards read

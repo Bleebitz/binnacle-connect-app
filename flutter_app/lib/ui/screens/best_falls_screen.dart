@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../core/models/clip.dart' show Clip, ClipKind;
 import '../../core/models/fall_entry.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
+import 'library_screen.dart' show ClipRepository;
 
-/// Best Falls. Two-part safety rule enforced by fall_entry.dart's
-/// FallRepository, not just by this UI — see that file's module comment.
-/// This screen's job is to make both parts visible: the entry sheet cannot
-/// be submitted without the rider-OK checkbox, and removed-for-injury
-/// entries stay visible in their own section rather than disappearing.
+/// Best Falls. Submission requires a real captured clip (Vision or phone —
+/// see fall_entry.dart's module comment for why the old free-typed-name-
+/// plus-checkbox flow is gone), and removed-for-injury entries stay visible
+/// in their own section rather than disappearing.
 class BestFallsScreen extends StatefulWidget {
   final FallRepository repository;
   const BestFallsScreen({super.key, required this.repository});
@@ -20,6 +22,14 @@ class BestFallsScreen extends StatefulWidget {
 class _BestFallsScreenState extends State<BestFallsScreen> {
   @override
   Widget build(BuildContext context) {
+    final clips = context.watch<ClipRepository>().clips;
+    String? clipTitle(String clipId) {
+      for (final c in clips) {
+        if (c.id == clipId) return c.title;
+      }
+      return null; // the source clip was deleted from the Library — entry still stands
+    }
+
     return AnimatedBuilder(
       animation: widget.repository,
       builder: (context, _) {
@@ -34,6 +44,7 @@ class _BestFallsScreenState extends State<BestFallsScreen> {
                   children: [
                     ...ranked.map((e) => _FallCard(
                           entry: e,
+                          sourceClipTitle: clipTitle(e.sourceClipId),
                           onVote: (fire, stoke) =>
                               widget.repository.vote(e.id, fire: fire, stoke: stoke),
                           onReportInjury: () => _confirmReportInjury(context, e.id),
@@ -44,7 +55,12 @@ class _BestFallsScreenState extends State<BestFallsScreen> {
                         child: Text('REMOVED — INJURY REPORTED',
                             style: TextStyle(color: BinnacleColors.orange, fontSize: 11)),
                       ),
-                      ...removed.map((e) => _FallCard(entry: e, onVote: null, onReportInjury: null)),
+                      ...removed.map((e) => _FallCard(
+                            entry: e,
+                            sourceClipTitle: clipTitle(e.sourceClipId),
+                            onVote: null,
+                            onReportInjury: null,
+                          )),
                     ],
                   ],
                 ),
@@ -92,9 +108,15 @@ class _BestFallsScreenState extends State<BestFallsScreen> {
 
 class _FallCard extends StatelessWidget {
   final FallEntry entry;
+  final String? sourceClipTitle;
   final void Function(bool fire, bool stoke)? onVote;
   final VoidCallback? onReportInjury;
-  const _FallCard({required this.entry, required this.onVote, required this.onReportInjury});
+  const _FallCard({
+    required this.entry,
+    required this.sourceClipTitle,
+    required this.onVote,
+    required this.onReportInjury,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -113,9 +135,15 @@ class _FallCard extends StatelessWidget {
             children: [
               Text(entry.riderName, style: Theme.of(context).textTheme.titleMedium),
               Row(children: [
-                const Icon(Icons.check_circle_outline, size: 12, color: BinnacleColors.tealBright),
+                const Icon(Icons.videocam_outlined, size: 12, color: BinnacleColors.tealBright),
                 const SizedBox(width: 4),
-                Text('Rider OK signaled', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright)),
+                Expanded(
+                  child: Text(
+                    sourceClipTitle == null ? 'Verified capture' : 'Verified capture · $sourceClipTitle',
+                    style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ]),
             ],
           ),
@@ -155,26 +183,19 @@ class _VoteBtn extends StatelessWidget {
       );
 }
 
-class _EntrySheet extends StatefulWidget {
+/// Submission is picking real footage, not filling out a form: a free-typed
+/// rider name plus a self-ticked "rider signaled OK" checkbox let anyone
+/// claim anything with no connection to what actually happened on the
+/// water. Consent to appear on this board is part of the account-level
+/// user agreement made at sign-up — nothing to re-confirm here.
+class _EntrySheet extends StatelessWidget {
   final FallRepository repository;
   const _EntrySheet({required this.repository});
 
   @override
-  State<_EntrySheet> createState() => _EntrySheetState();
-}
-
-class _EntrySheetState extends State<_EntrySheet> {
-  final _name = TextEditingController();
-  bool _riderOk = false;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final clips = context.watch<ClipRepository>().clips.where((c) => c.kind == ClipKind.fall).toList();
+
     return Padding(
       padding: EdgeInsets.only(
           left: 20, right: 20, top: 20, bottom: MediaQuery.of(context).viewInsets.bottom + 20),
@@ -183,71 +204,70 @@ class _EntrySheetState extends State<_EntrySheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Submit a fall', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 14),
-          TextField(controller: _name, decoration: const InputDecoration(labelText: 'Rider name')),
-          const SizedBox(height: 10),
-          // The safety gate. Unticking this must be the ONLY way this entry
-          // is missing riderOkSignaled — there is no other path to Submit.
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            value: _riderOk,
-            // setState here is what makes the Submit button below actually
-            // react to the checkbox — the exact bug class caught and fixed
-            // in Top Tricks' entry sheet, applied here before it could ship
-            // broken a second time.
-            onChanged: (v) => setState(() => _riderOk = v ?? false),
-            title: const Text(
-              'Rider signaled OK (both arms up) at the time of the fall',
-              style: TextStyle(fontSize: 12.5),
-            ),
+          const SizedBox(height: 6),
+          Text(
+            'Pick footage captured on Vision or your phone. Consent to appear '
+            'on this board is part of your account agreement — nothing more '
+            'to confirm here.',
+            style: TextStyle(color: BinnacleColors.slate, fontSize: 11.5, height: 1.4),
           ),
           const SizedBox(height: 14),
+          if (clips.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('No fall footage in your Library yet.',
+                  style: TextStyle(color: BinnacleColors.slateDim, fontSize: 12)),
+            )
+          else
+            ...clips.map((c) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.videocam_outlined, color: BinnacleColors.tealBright),
+                  title: Text(c.title, style: const TextStyle(fontSize: 13.5)),
+                  subtitle: Text('${c.duration.inSeconds}s', style: BinnacleTheme.mono(size: 10.5)),
+                  trailing: const Icon(Icons.chevron_right, size: 18),
+                  onTap: () => _submitFromClip(context, c),
+                )),
+          const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
-            child: FilledButton(
-              onPressed: _riderOk ? _submit : null,
-              child: const Text('Submit'),
+            child: OutlinedButton.icon(
+              onPressed: () => _importAndSubmit(context),
+              icon: const Icon(Icons.upload_outlined),
+              label: const Text('Import from Vision or phone'),
             ),
           ),
-          if (!_riderOk)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'Cannot submit without the rider-OK signal — this is the '
-                'qualifying gate for Best Falls, not optional.',
-                style: TextStyle(color: BinnacleColors.amber, fontSize: 11),
-              ),
-            ),
         ],
       ),
     );
   }
 
-  void _submit() {
-    // The button is disabled unless _riderOk is true, so this branch should
-    // be unreachable with riderOkSignaled false — submit() throws
-    // MissingRiderOkSignal as a backstop regardless, per the "don't rely on
-    // the UI alone" discipline used for role enforcement elsewhere. Caught
-    // here defensively rather than trusted to never happen.
+  void _submitFromClip(BuildContext context, Clip clip) {
+    // sourceClipId is always populated here — submit() throws
+    // MissingSourceClip as a backstop regardless, per the "don't rely on
+    // the UI alone" discipline used for role enforcement elsewhere.
     try {
-      widget.repository.submit(FallEntry(
+      repository.submit(FallEntry(
         id: 'fall-${DateTime.now().millisecondsSinceEpoch}',
-        riderId: 'r0',
-        riderName: _name.text.trim().isEmpty ? 'Unnamed rider' : _name.text.trim(),
-        riderOkSignaled: _riderOk,
+        riderId: clip.riderId,
+        riderName: _displayName(clip.riderId),
+        sourceClipId: clip.id,
         submittedAt: DateTime.now(),
       ));
       Navigator.of(context).pop();
-    } on MissingRiderOkSignal {
-      // Should be unreachable given the disabled-button gate above. If this
-      // ever fires, something upstream broke the gate — fail loudly rather
-      // than silently swallowing it.
+    } on MissingSourceClip {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cannot submit without rider-OK signal.')),
+        const SnackBar(content: Text('Cannot submit without a real captured clip.')),
       );
     }
   }
+
+  void _importAndSubmit(BuildContext context) {
+    final clip = context.read<ClipRepository>().importFallClip();
+    _submitFromClip(context, clip);
+  }
+
+  String _displayName(String riderId) =>
+      riderId.isEmpty ? 'Unknown rider' : riderId[0].toUpperCase() + riderId.substring(1);
 }
 
 class _EmptyState extends StatelessWidget {
@@ -256,7 +276,7 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) => const BinnacleEmptyState(
         icon: Icons.videocam_outlined,
         title: 'No falls yet',
-        subtitle: 'Wipeouts count too —\nrider-OK required before it hits the board.',
+        subtitle: 'Wipeouts count too —\nsubmit real footage from Vision or your phone.',
         accent: BinnacleColors.orange,
       );
 }
