@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/wake_entry.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/empty_state.dart';
 
 class KingOfWakeScreen extends StatefulWidget {
   final WakeRepository repository;
@@ -281,14 +282,14 @@ class _VoteButton extends StatelessWidget {
 class _EmptyBoard extends StatelessWidget {
   const _EmptyBoard();
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 60),
-        child: Column(children: [
-          const Icon(Icons.emoji_events_outlined, size: 40, color: BinnacleColors.slateDim),
-          const SizedBox(height: 10),
-          Text('No entries in this class yet. Be the first.',
-              style: TextStyle(color: BinnacleColors.slate)),
-        ]),
+  Widget build(BuildContext context) => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 30),
+        child: BinnacleEmptyState(
+          icon: Icons.emoji_events_outlined,
+          title: 'No runs on the board',
+          subtitle: 'GPS-verified speed leaderboard —\nfirst entry takes the crown.',
+          accent: BinnacleColors.amber,
+        ),
       );
 }
 

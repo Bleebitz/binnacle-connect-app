@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/fall_entry.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/empty_state.dart';
 
 /// Best Falls. Two-part safety rule enforced by fall_entry.dart's
 /// FallRepository, not just by this UI — see that file's module comment.
@@ -253,10 +254,10 @@ class _EntrySheetState extends State<_EntrySheet> {
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
-  Widget build(BuildContext context) => const Center(
-        child: Padding(
-          padding: EdgeInsets.all(30),
-          child: Text('No falls submitted yet.', style: TextStyle(color: BinnacleColors.slate)),
-        ),
+  Widget build(BuildContext context) => const BinnacleEmptyState(
+        icon: Icons.videocam_outlined,
+        title: 'No falls yet',
+        subtitle: 'Wipeouts count too —\nrider-OK required before it hits the board.',
+        accent: BinnacleColors.orange,
       );
 }

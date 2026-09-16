@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/clip.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/empty_state.dart';
 
 /// Local, in-memory clip store for this scaffold. A real build replaces
 /// this with a repository backed by the Core's clip API — signing and GPS
@@ -586,21 +587,10 @@ String _timeAgo(DateTime t) {
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(30),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.video_camera_back_outlined, size: 40, color: BinnacleColors.slateDim),
-              const SizedBox(height: 14),
-              Text(
-                'Nothing here yet. Capture a highlight, or import footage to run through Track.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: BinnacleColors.slate),
-              ),
-            ],
-          ),
-        ),
+  Widget build(BuildContext context) => const BinnacleEmptyState(
+        icon: Icons.video_camera_back_outlined,
+        title: 'No clips yet',
+        subtitle: 'Hit the water and press Save Highlight —\nyour best pass shows up here first.',
+        accent: BinnacleColors.tealBright,
       );
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/trick_entry.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/empty_state.dart';
 
 /// Top Tricks. Community-vote-only ranking — see the design note in
 /// trick_entry.dart for why (no real trick classifier exists yet).
@@ -22,7 +23,12 @@ class _TopTricksScreenState extends State<TopTricksScreen> {
         return Scaffold(
           appBar: AppBar(title: const Text('Top Tricks')),
           body: ranked.isEmpty
-              ? const _EmptyState(text: 'No tricks logged yet. Be the first.')
+              ? const BinnacleEmptyState(
+                  icon: Icons.auto_awesome_outlined,
+                  title: 'No tricks logged',
+                  subtitle: 'Land something clean and log it —\ncommunity votes decide who\'s got the best trick.',
+                  accent: BinnacleColors.amber,
+                )
               : ListView.builder(
                   padding: const EdgeInsets.all(12),
                   itemCount: ranked.length,
@@ -195,14 +201,3 @@ class _EntrySheetState extends State<_EntrySheet> {
   }
 }
 
-class _EmptyState extends StatelessWidget {
-  final String text;
-  const _EmptyState({required this.text});
-  @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(30),
-          child: Text(text, textAlign: TextAlign.center, style: const TextStyle(color: BinnacleColors.slate)),
-        ),
-      );
-}

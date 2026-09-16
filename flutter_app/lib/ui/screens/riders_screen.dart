@@ -4,6 +4,7 @@ import '../../core/models/trick_entry.dart';
 import '../../core/models/fall_entry.dart';
 import '../../core/models/riders_leaderboard.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/empty_state.dart';
 
 /// Riders — cumulative season points. Read-only: this screen has no entry
 /// sheet and no repository of its own, because RidersLeaderboard is a pure
@@ -24,12 +25,11 @@ class RidersScreen extends StatelessWidget {
         builder: (context, _) {
           final standings = RidersLeaderboard.compute(wake: wake, trick: trick, fall: fall);
           if (standings.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(30),
-                child: Text('No entries yet across King of Wake, Top Tricks, or Best Falls.',
-                    textAlign: TextAlign.center, style: TextStyle(color: BinnacleColors.slate)),
-              ),
+            return const BinnacleEmptyState(
+              icon: Icons.leaderboard_outlined,
+              title: 'No standings yet',
+              subtitle: 'Points roll in from King of Wake, Top Tricks,\nand Best Falls — compete in any to appear here.',
+              accent: BinnacleColors.tealBright,
             );
           }
           return ListView.builder(

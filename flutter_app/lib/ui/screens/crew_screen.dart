@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/rider.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/empty_state.dart';
 
 class CrewRepository extends ChangeNotifier {
   final List<Rider> _riders = [const Rider(id: 'r0', name: 'You')];
@@ -66,9 +67,11 @@ class _SessionsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (sessions.isEmpty) {
-      return Center(
-        child: Text('No sessions yet — they appear once a highlight is saved on the water.',
-            textAlign: TextAlign.center, style: TextStyle(color: BinnacleColors.slate)),
+      return const BinnacleEmptyState(
+        icon: Icons.directions_boat_filled_outlined,
+        title: 'No sessions yet',
+        subtitle: 'They show up automatically\nonce a highlight is saved on the water.',
+        accent: BinnacleColors.tealBright,
       );
     }
     return ListView.builder(
