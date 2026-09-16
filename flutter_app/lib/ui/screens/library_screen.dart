@@ -1,17 +1,67 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 import '../../core/app_config.dart';
 import '../../core/models/clip.dart';
+import '../../core/services/media_catalog_service.dart';
+import '../../core/services/pairing_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
 
-/// Local, in-memory clip store for this scaffold. A real build replaces
-/// this with a repository backed by the Core's clip API — signing and GPS
-/// attachment happen on Vision at capture time (see F-44), this class only
-/// displays what it's told.
+/// Clip store. Demo mode is a local, in-memory scaffold ([seedDemo]/
+/// [addFromCapture]/[importFallClip]). Core mode is backed by a real fetch
+/// against the Core's clip catalog ([loadFromCore]) — see
+/// media_catalog_service.dart for the (unverified, no live Core exists yet)
+/// endpoint contract.
 class ClipRepository extends ChangeNotifier {
   final List<Clip> _clips = [];
   List<Clip> get clips => List.unmodifiable(_clips);
+
+  bool loading = false;
+  String? loadError;
+
+  /// True once a real load has been attempted (success or failure) — the
+  /// idempotency guard for the trigger in main.dart, so a legitimately
+  /// empty catalog doesn't get re-fetched forever. [retryLoadFromCore]
+  /// clears it for an explicit retry.
+  bool attemptedLoad = false;
+
+  /// Fetches the real clip catalog from the Core. Replaces the whole list
+  /// rather than merging — the Core is the state authority for what clips
+  /// exist, same principle ControlChannelService applies to vessel state.
+  ///
+  /// Demo/core safety lives in which [MediaCatalogService] the caller
+  /// passes (NoOpMediaCatalogService vs HttpMediaCatalogService), the same
+  /// pattern PairingService uses for its transport/key-material — not an
+  /// internal mode check here, so this stays testable without a
+  /// compile-time dart-define.
+  Future<void> loadFromCore(MediaCatalogService service, String deviceId,
+      {required String bearerToken}) async {
+    loading = true;
+    loadError = null;
+    notifyListeners();
+    final result = await service.fetchClips(deviceId, bearerToken: bearerToken);
+    loading = false;
+    attemptedLoad = true;
+    if (result.outcome == CatalogOutcome.success) {
+      _clips
+        ..clear()
+        ..addAll(result.clips);
+    } else {
+      loadError = result.message ?? result.outcome.name;
+    }
+    notifyListeners();
+  }
+
+  void retryLoadFromCore(MediaCatalogService service, String deviceId,
+          {required String bearerToken}) =>
+      Future(() {
+        attemptedLoad = false;
+        loadFromCore(service, deviceId, bearerToken: bearerToken);
+      });
 
   void add(Clip c) {
     _clips.insert(0, c);
@@ -199,7 +249,21 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                         ),
                       ),
                       _FilterRow(current: _filter, onChanged: (f) => setState(() => _filter = f)),
-                      const Expanded(child: _EmptyState()),
+                      Expanded(
+                        child: !AppConfig.isDemo && widget.repository.loading
+                            ? const Center(child: CircularProgressIndicator())
+                            : !AppConfig.isDemo && widget.repository.loadError != null
+                                ? _CatalogErrorState(
+                                    message: widget.repository.loadError!,
+                                    onRetry: () => widget.repository.retryLoadFromCore(
+                                      HttpMediaCatalogService(),
+                                      context.read<PairingService>().credential!.deviceId,
+                                      bearerToken:
+                                          context.read<PairingService>().credential!.bearerToken!,
+                                    ),
+                                  )
+                                : const _EmptyState(),
+                      ),
                     ],
                   )
                 : CustomScrollView(
@@ -263,42 +327,133 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
   void _openClip(BuildContext context, Clip clip) {
     showGlassBottomSheet(
       context: context,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(clip.title, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 6),
-            Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}', style: BinnacleTheme.mono(size: 11)),
-            const SizedBox(height: 10),
-            if (clip.signed && clip.gpsAttached)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: BinnacleColors.tealBright.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: BinnacleColors.tealBright.withValues(alpha: 0.3)),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.verified_outlined, size: 14, color: BinnacleColors.tealBright),
-                  const SizedBox(width: 6),
-                  Text('Signed on Vision · GPS attached', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright)),
-                ]),
+      builder: (_) => _ClipDetailSheet(clip: clip, repository: widget.repository),
+    );
+  }
+}
+
+/// Real playback (when the clip has a real Core media URL), download (opens
+/// the media URL — the OS/browser handles the actual save), and share (the
+/// real media link via share_plus) — replacing what used to be a purely
+/// decorative play icon and a favorite button as the only real action.
+class _ClipDetailSheet extends StatefulWidget {
+  final Clip clip;
+  final ClipRepository repository;
+  const _ClipDetailSheet({required this.clip, required this.repository});
+
+  @override
+  State<_ClipDetailSheet> createState() => _ClipDetailSheetState();
+}
+
+class _ClipDetailSheetState extends State<_ClipDetailSheet> {
+  VideoPlayerController? _player;
+  String? _playerError;
+
+  bool get _hasRealMedia => widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
+
+  @override
+  void dispose() {
+    _player?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _play() async {
+    final url = widget.clip.mediaUrl;
+    if (url == null) return;
+    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    setState(() => _player = controller);
+    try {
+      await controller.initialize();
+      await controller.play();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) setState(() => _playerError = 'Could not play this clip: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final clip = widget.clip;
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_player != null && _player!.value.isInitialized)
+            AspectRatio(
+              aspectRatio: _player!.value.aspectRatio,
+              child: VideoPlayer(_player!),
+            )
+          else if (_hasRealMedia)
+            SizedBox(
+              height: 44,
+              child: OutlinedButton.icon(
+                onPressed: _player == null ? _play : null,
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: Text(_player == null ? 'Play' : 'Loading…'),
               ),
-            const SizedBox(height: 16),
-            Row(children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => widget.repository.toggleFavorite(clip.id),
-                  icon: Icon(clip.favorite ? Icons.favorite : Icons.favorite_border),
-                  label: Text(clip.favorite ? 'Favorited' : 'Favorite'),
-                ),
+            ),
+          if (_playerError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(_playerError!, style: const TextStyle(color: BinnacleColors.amber, fontSize: 12)),
+            ),
+          const SizedBox(height: 10),
+          Text(clip.title, style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 6),
+          Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}', style: BinnacleTheme.mono(size: 11)),
+          const SizedBox(height: 10),
+          if (clip.signed && clip.gpsAttached)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: BinnacleColors.tealBright.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: BinnacleColors.tealBright.withValues(alpha: 0.3)),
               ),
-            ]),
-          ],
-        ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.verified_outlined, size: 14, color: BinnacleColors.tealBright),
+                const SizedBox(width: 6),
+                Text('Signed on Vision · GPS attached', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright)),
+              ]),
+            ),
+          if (!_hasRealMedia)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                AppConfig.isDemo
+                    ? 'Demo clip — no real media to download or share.'
+                    : 'No media available for this clip yet.',
+                style: const TextStyle(color: BinnacleColors.slate, fontSize: 12),
+              ),
+            ),
+          const SizedBox(height: 16),
+          Row(children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => widget.repository.toggleFavorite(clip.id),
+                icon: Icon(clip.favorite ? Icons.favorite : Icons.favorite_border),
+                label: Text(clip.favorite ? 'Favorited' : 'Favorite'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Download',
+              onPressed: clip.mediaUrl == null
+                  ? null
+                  : () => launchUrl(Uri.parse(clip.mediaUrl!), mode: LaunchMode.externalApplication),
+              icon: const Icon(Icons.download_outlined),
+            ),
+            IconButton(
+              tooltip: 'Share',
+              onPressed: clip.mediaUrl == null
+                  ? null
+                  : () => Share.share(clip.mediaUrl!, subject: clip.title),
+              icon: const Icon(Icons.ios_share),
+            ),
+          ]),
+        ],
       ),
     );
   }
@@ -615,5 +770,34 @@ class _EmptyState extends StatelessWidget {
         title: 'No clips yet',
         subtitle: 'Hit the water and press Save Highlight —\nyour best pass shows up here first.',
         accent: BinnacleColors.tealBright,
+      );
+}
+
+/// A real fetch against the Core's clip catalog failed — shown instead of
+/// the "no clips yet" empty state, which would otherwise misrepresent a
+/// failed load as a genuinely empty Library.
+class _CatalogErrorState extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _CatalogErrorState({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, color: BinnacleColors.amber, size: 40),
+              const SizedBox(height: 12),
+              const Text("Couldn't load clips from Core",
+                  style: TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 16)),
+              const SizedBox(height: 6),
+              Text(message, textAlign: TextAlign.center, style: const TextStyle(color: BinnacleColors.slate)),
+              const SizedBox(height: 16),
+              OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
+          ),
+        ),
       );
 }

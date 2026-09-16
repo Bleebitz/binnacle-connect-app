@@ -11,6 +11,7 @@ import 'core/services/pairing_service.dart';
 import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
 import 'ui/screens/capture_screen.dart';
 import 'ui/screens/community_screen.dart';
+import 'core/services/media_catalog_service.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/crew_screen.dart';
 import 'core/models/trick_entry.dart';
@@ -110,11 +111,32 @@ class BinnacleConnectApp extends StatelessWidget {
           if (AppConfig.isDemo) telemetry.startSimulated();
           return telemetry;
         }),
-        ChangeNotifierProvider(create: (_) {
-          final clips = ClipRepository();
-          if (AppConfig.isDemo) clips.seedDemo();
-          return clips;
-        }),
+        // ProxyProvider2 so a real Core connection triggers exactly one real
+        // catalog fetch — same idempotent-guard pattern as
+        // ControlChannelService.connect() above (guard on a "already tried"
+        // flag rather than re-triggering every rebuild).
+        ChangeNotifierProxyProvider2<PairingService, ControlChannelService, ClipRepository>(
+          create: (_) {
+            final clips = ClipRepository();
+            if (AppConfig.isDemo) clips.seedDemo();
+            return clips;
+          },
+          update: (context, pairing, control, clips) {
+            final repo = clips!;
+            if (!AppConfig.isDemo &&
+                control.hasCurrentState &&
+                pairing.credential?.bearerToken != null &&
+                !repo.loading &&
+                !repo.attemptedLoad) {
+              repo.loadFromCore(
+                HttpMediaCatalogService(),
+                pairing.credential!.deviceId,
+                bearerToken: pairing.credential!.bearerToken!,
+              );
+            }
+            return repo;
+          },
+        ),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),

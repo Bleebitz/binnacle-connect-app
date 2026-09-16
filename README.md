@@ -52,15 +52,18 @@ Verification for these increments:
   or physical-device acceptance.
 - Lockfile reconciled to the pinned Flutter SDK's dependency constraints.
 
-**Still open; BIN-32 is not Done:** real pairing transport, QR camera scanning,
-hardware-backed key generation, secure credential persistence, approved live
-telemetry/readiness schema, authenticated WebRTC, Core media catalog and actual
-Library playback/export. The linked Core firmware pairing requirements specify
-request/response fields but identify the firmware as unimplemented and do not
-provide implemented endpoint paths or a test target. No physical Core or Android
-device session has been demonstrated here. INTERNET permission was already in
-the release manifest at the inspected baseline; that alone does not establish
-Android release-network acceptance.
+**Update (see "Status, stated honestly" below for the current, complete
+picture):** every item this section originally listed as still open — real
+pairing transport, QR camera scanning, hardware-backed (software-generated,
+Keychain/Keystore-persisted — not Secure-Enclave-bound) key generation,
+secure credential persistence, authenticated WebRTC, Core media catalog and
+actual Library playback/download/share — is now implemented client-side.
+The Android release-build environment block below is also resolved. What
+genuinely remains: an approved Core wire contract (this client's endpoint/
+framing assumptions throughout are still unverified against a live Core —
+none exists yet) and the physical acceptance sequence on real hardware.
+INTERNET permission was already in the release manifest at the inspected
+baseline; that alone does not establish Android release-network acceptance.
 
 Physical acceptance must record device/firmware/app revisions and demonstrate
 pair → authenticated connection → live telemetry/video → rider/Track state →
@@ -137,8 +140,13 @@ operating the camera:
   shows every captured clip as one running timeline, which is what a single
   day actually looks like today without inventing boundaries the app can't
   detect yet.
-- **Library** — unchanged from before this reorg (see the cinematic-feed
-  work already documented in git history).
+- **Library** (`library_screen.dart`) — cinematic feed unchanged from before
+  the BIN-32 reorg (see git history), but the clip data behind it is no
+  longer purely decorative: Core mode fetches a real clip catalog from the
+  Core (`MediaCatalogService`) and, for any clip the Core reports a real
+  media URL for, plays it with `video_player`, downloads it via
+  `url_launcher`, and shares it via `share_plus` — all real client
+  behavior, unverified against a live Core (see "Status" below).
 - **Community** (`community_screen.dart`) — Crew and the four leaderboards
   (King of Wake, Top Tricks, Best Falls, Riders), one level down instead of
   four separate top-level tabs. `CrewScreen` and `CompeteScreen` are now
@@ -159,31 +167,56 @@ by name but don't restate them.
 
 ## Status, stated honestly
 
-- `dart analyze`: clean (0 errors; info-level style lints only, all
-  `prefer_const_constructors` or one known false-positive-shaped
-  `use_build_context_synchronously`).
-- `flutter test`: 7/7 passing — app launch, navigation, the simulated
-  link-status badge, and Compete's three leaderboards (King of Wake, Top
-  Tricks, Best Falls) plus the Riders aggregate.
-- `flutter build web`: succeeds; compiled output verified to contain real
-  app logic (not a stub). Rendered and interacted with in a real browser —
-  every screen, not just Live — including tapping through Community's
-  Compete leaderboards, favoriting a Library clip, viewing the Session
-  timeline, and triggering/dismissing the MOB alert.
-- `flutter build apk --debug`: succeeds, both locally and in CI. The APK
+- `dart analyze`: clean (0 errors/warnings; info-level style lints only).
+- `flutter test`: 47/47 passing, covering app launch/navigation, the
+  Compete leaderboards and Riders aggregate, real pairing-transport
+  HTTP behavior, real EC key generation/persistence, real secure-storage
+  round-tripping, the Core-mode socket boundary (ack/reject/timeout/
+  disconnect, reconnect-without-replay, bearer-token-off-the-URL), real
+  WebRTC signaling over the control socket, and real Core clip-catalog
+  fetch/error/retry behavior.
+- `flutter build web`: succeeds in both demo and Core mode; compiled
+  output verified to contain real app logic (not a stub). Rendered and
+  interacted with in a real browser — every screen, not just Live —
+  including tapping through Community's Compete leaderboards, favoriting a
+  Library clip, viewing the Session timeline, and triggering/dismissing
+  the MOB alert.
+- `flutter build apk --debug`: succeeds, both locally and in CI, including
+  with the real `flutter_webrtc` native plugin now compiled in. The APK
   has been installed and launched on an **Android emulator** (API 36) —
   confirmed rendering correctly (including the demo-mode `Simulated`
   status) and confirmed basic tab navigation works without crashing.
-  **Not yet installed/launched on a physical device**, and not yet built
-  as a release build — both still open.
+- `flutter build apk --release`: succeeds (signed with the debug key —
+  no release keystore exists yet, which is itself accurate: this isn't
+  ready to publish). A prior BIN-32 pass reported this environment-
+  blocked by an NDK compiler that couldn't execute; that's no longer
+  reproducing and it now runs in CI too.
 - `connect_audit.py`: passes clean against `flutter_app/lib`, in CI too.
 - No iOS build has been attempted (no Xcode available where this was
   built).
-- No connection to real hardware exists yet. Demo mode (the default —
-  see "App mode" above) never attempts one on purpose. Vision hardware has
-  not been built (see the Fork Tracker in Drive — VIS-01 camera procurement
-  is still open), so core mode is wired but unverified against anything
-  real.
+- **What's real client-side now**: pairing transport (real HTTPS),
+  QR camera scanning, EC keypair generation + Keychain/Keystore-backed
+  credential persistence, the Core-mode socket boundary (real ack/reject/
+  timeout/reconnect, no command replay, bearer token off the URL), real
+  WebRTC signaling + a genuine `RTCPeerConnection`/ICE/video-track
+  lifecycle, and a real Core clip-catalog fetch feeding real playback/
+  download/share.
+- **What every one of those has in common**: no real Core exists to
+  verify any of it against yet (VIS-01 camera procurement is still open
+  per the Fork Tracker in Drive). Every wire contract above (pairing
+  endpoint shape, socket auth framing, WebRTC signaling topics, clip
+  catalog endpoint/fields) is this client's best-effort, documented
+  assumption — real, tested client behavior on this side of that
+  boundary, unverified on the other side of it. Demo mode never attempts
+  any of this on purpose (see "App mode" above).
+- **Still genuinely open**: an approved Core wire contract to replace
+  those assumptions, and the physical acceptance sequence — pair →
+  authenticated connection → live telemetry/video → rider/Track state →
+  capture acknowledgment → actual Library playback, including
+  unauthorized/expired credentials, certificate mismatch, AP restart,
+  phone sleep/resume, Internet-off LAN operation, link loss, rejection
+  and timeout. No simulated result closes that gate — it needs a real
+  Core and a real device, neither of which this environment has.
 
 ## Running it locally
 

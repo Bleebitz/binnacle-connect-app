@@ -75,6 +75,24 @@ jobs:
           path: flutter_app/build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 14
 
+      # A prior BIN-32 attempt reported this environment-blocked (an
+      # installed NDK compiler that couldn't execute) — see README history.
+      # Re-verified locally as of this commit: it genuinely succeeds now,
+      # producing a real signed-debug-key release APK, closing one of
+      # BIN-32's explicitly-named remaining gates ("produce and verify an
+      # Android release build"). This is NOT the physical acceptance gate —
+      # running on real hardware against a real Core is still separately
+      # required.
+      - name: flutter build apk --release
+        working-directory: flutter_app
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apk
+          path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+
   web_dashboard:
     name: Web dashboard — build
     runs-on: ubuntu-latest
