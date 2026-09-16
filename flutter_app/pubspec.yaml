@@ -17,6 +17,8 @@ dependencies:
   http: ^1.2.2               # Real Core pairing transport (HTTPS POST) — see pairing_transport.dart
   mobile_scanner: ^5.2.3     # Real camera QR scanning for pairing — see pairing_screen.dart
   flutter_secure_storage: ^9.2.2 # Keychain/Keystore-backed credential persistence — see pairing_service.dart
+  basic_utils: ^5.7.0        # Real EC keypair generation + PEM/CSR encoding — see pairing_service.dart's SecureKeyMaterial
+  pointycastle: ^4.0.0       # EC key types (ECPrivateKey/ECPublicKey) used directly by SecureKeyMaterial
 
   # NOTE — flutter_webrtc is NOT included as a hard dependency here.
   # eptz_video_view.dart is written against an abstract interface so the

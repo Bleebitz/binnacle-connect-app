@@ -8,9 +8,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'package:basic_utils/basic_utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:pointycastle/export.dart' show ECPrivateKey, ECPublicKey;
 
 import '../app_config.dart';
 import '../models/credential.dart';
@@ -78,12 +80,21 @@ class PairingResult {
 /// Abstraction over secure key material so the app never handles raw crypto
 /// directly and Phase 2 (mTLS) can swap the implementation.
 ///
-/// PRODUCTION NOTE: the placeholder below is NOT cryptographically secure and
-/// must be replaced before any real pairing. Use a platform keystore-backed
-/// implementation — iOS Secure Enclave / Android Keystore — so the private key
-/// is generated in hardware and never becomes extractable. This class exists
-/// now so the CSR flow is already wired (§4.3a): the keypair is generated at
-/// pairing even though Phase 1 does not use it.
+/// PRODUCTION NOTE: [PlaceholderKeyMaterial] is NOT cryptographically secure
+/// and exists for tests only. [SecureKeyMaterial] is the real implementation:
+/// a genuine EC (P-256) keypair via `basic_utils`/`pointycastle`, private key
+/// persisted through the same Keychain/Keystore-backed storage as credentials
+/// (see [SecureCredentialStore]). This class exists so the CSR flow is
+/// already wired (§4.3a): the keypair is generated at pairing even though
+/// Phase 1 does not use it.
+///
+/// WHAT THIS DOES NOT DO: the private key is generated in Dart and only
+/// encrypted at rest by the OS keystore — it is NOT hardware-bound the way a
+/// true iOS Secure Enclave / Android StrongBox key is (non-extractable,
+/// never exists outside the secure element). That requires native platform
+/// channel code per-platform and is out of scope here. This is a real step
+/// up from the placeholder (an actual asymmetric keypair, not a random
+/// string), not the final hardware-backed implementation §4.3a describes.
 abstract class KeyMaterial {
   Future<String> publicKeyPem();
   Future<void> ensureKeypair();
@@ -107,6 +118,62 @@ class PlaceholderKeyMaterial implements KeyMaterial {
   Future<String> publicKeyPem() async {
     await ensureKeypair();
     return _pub!;
+  }
+}
+
+/// Real keypair generation: a genuine NIST P-256 EC key via
+/// `basic_utils`/`pointycastle`, not a placeholder string. The private key is
+/// generated once, PEM-encoded, and persisted through [FlutterSecureStorage]
+/// (iOS Keychain / Android EncryptedSharedPreferences) so it survives app
+/// restarts without ever touching plain storage or crossing the network —
+/// only the public key is ever sent to the Core, in [PairingService.pair].
+class SecureKeyMaterial implements KeyMaterial {
+  static const _privateKeyKey = 'binnacle_device_private_key_v1';
+  final FlutterSecureStorage _storage;
+
+  ECPrivateKey? _private;
+  String? _publicPem;
+
+  SecureKeyMaterial({FlutterSecureStorage? storage})
+      : _storage = storage ??
+            const FlutterSecureStorage(
+              aOptions: AndroidOptions(encryptedSharedPreferences: true),
+            );
+
+  @override
+  Future<void> ensureKeypair() async {
+    if (_private != null) return;
+
+    final existing = await _storage.read(key: _privateKeyKey);
+    if (existing != null) {
+      _private = CryptoUtils.ecPrivateKeyFromPem(existing);
+      _publicPem = CryptoUtils.encodeEcPublicKeyToPem(_publicFromPrivate(_private!));
+      return;
+    }
+
+    final pair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
+    _private = pair.privateKey as ECPrivateKey;
+    final public = pair.publicKey as ECPublicKey;
+    _publicPem = CryptoUtils.encodeEcPublicKeyToPem(public);
+
+    await _storage.write(
+      key: _privateKeyKey,
+      value: CryptoUtils.encodeEcPrivateKeyToPem(_private!),
+    );
+  }
+
+  @override
+  Future<String> publicKeyPem() async {
+    await ensureKeypair();
+    return _publicPem!;
+  }
+
+  // basic_utils' PEM decode only returns the private scalar; re-derive Q
+  // (the public point) from it so a restored key can still report its
+  // public PEM without needing it stored separately.
+  ECPublicKey _publicFromPrivate(ECPrivateKey private) {
+    final q = private.parameters!.G * private.d;
+    return ECPublicKey(q, private.parameters);
   }
 }
 
@@ -288,8 +355,12 @@ class PairingService extends ChangeNotifier {
   bool busy = false;
 
   PairingService({KeyMaterial? keyMaterial, CredentialStore? store, PairingTransport? transport})
-      : keyMaterial = keyMaterial ?? PlaceholderKeyMaterial(),
-        store = store ?? InMemoryCredentialStore(),
+      : keyMaterial = keyMaterial ?? (AppConfig.isDemo ? PlaceholderKeyMaterial() : SecureKeyMaterial()),
+        // Real persistence in both modes — demo credentials are fabricated
+        // but still need to survive an app restart for the pairing UI to be
+        // usable; InMemoryCredentialStore is a test-only double, not
+        // something main.dart should ever get by default.
+        store = store ?? SecureCredentialStore(),
         // Demo mode must never attempt a real network request, same rule as
         // ControlChannelService's connect() gating in main.dart — see
         // app_config.dart. NoOpPairingTransport always reports windowClosed
