@@ -53,7 +53,7 @@ class BinnacleConnectApp extends StatelessWidget {
         ),
 
         ChangeNotifierProvider(create: (_) => TelemetrySocket()..startSimulated()),
-        ChangeNotifierProvider(create: (_) => ClipRepository()),
+        ChangeNotifierProvider(create: (_) => ClipRepository()..seedDemo()),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),

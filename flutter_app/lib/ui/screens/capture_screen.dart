@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/models/clip.dart' show ClipKind;
 import '../../core/models/vessel_state.dart';
 import '../../core/services/control_channel_service.dart';
 import '../../core/services/telemetry_socket.dart';
@@ -12,6 +13,7 @@ import '../widgets/eptz_video_view.dart';
 import '../widgets/mob_alert_banner.dart';
 import '../widgets/simulated_wake_view.dart';
 import '../widgets/telemetry_overlay.dart';
+import 'library_screen.dart' show ClipRepository;
 
 // Layout and componentry follow the retro-hero / technical-instrument UX
 // prototype's capture screen (screen-capture) as closely as native widgets
@@ -160,6 +162,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                         manual: state.framing.isManual,
                         onSnapshot: () {
                           _send(() => control.snapshot(actor: 'levi'));
+                          context.read<ClipRepository>().addFromCapture(kind: ClipKind.photo, preset: _preset);
                           _fireFlash();
                           _showSaveToast('Snapshot saved');
                         },
@@ -169,6 +172,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                                 postS: state.capture.postRollSeconds,
                                 actor: 'levi',
                               ));
+                          context.read<ClipRepository>().addFromCapture(kind: ClipKind.highlight, preset: _preset);
                           _showSaveToast('Highlight saved');
                         },
                         onOrient: () => _send(() => control.setControlMode(
@@ -208,6 +212,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                         headingDegrees: 128,
                         onAcknowledge: () {
                           _send(() => control.acknowledgeMob(actor: 'levi'));
+                          context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
                           setState(() => _mobActive = false);
                         },
                       ),
