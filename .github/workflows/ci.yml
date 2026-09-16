@@ -14,14 +14,18 @@ on:
 
 jobs:
   flutter_app:
-    name: Flutter app — analyze, test, static audit
+    name: Flutter app — analyze, test, static audit, web + Android builds
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to an exact patch, not `channel: stable` — that tracks
+      # whatever is current on the day CI happens to run, which is
+      # reproducible only on that day, not over time. See .fvmrc for the
+      # single source of truth this value must match.
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: "3.41.4"
 
       - name: flutter pub get
         working-directory: flutter_app
@@ -39,12 +43,33 @@ jobs:
         working-directory: flutter_app
         run: flutter build web
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: flutter_app/build/web
+          retention-days: 14
+
       - name: connect_audit.py static policy audit
         run: python3 tools/connect_audit/connect_audit.py flutter_app/lib
 
       - name: connect_audit.py self-test (fixtures must still block/pass correctly)
         working-directory: tools/connect_audit
         run: bash run_tests.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - name: flutter build apk --debug (second acceptance gate — see README)
+        working-directory: flutter_app
+        run: flutter build apk --debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: flutter_app/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 14
 
   web_dashboard:
     name: Web dashboard — build

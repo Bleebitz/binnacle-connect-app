@@ -14,21 +14,22 @@ its web dashboard/marketing site.
 - `tools/connect_audit/` — a static policy auditor for `flutter_app/`, plus
   its regression fixtures and self-test.
 - `.github/workflows/ci.yml` — runs `dart analyze`, `flutter test`,
-  `flutter build web`, the static auditor, and the web dashboard build on
-  every push and pull request. It does not yet build the Android APK — see
-  "What's still missing" below; this repo also has no configured git
-  remote, so this workflow file exists but has never actually run in CI.
+  `flutter build web`, `flutter build apk --debug`, the static auditor, and
+  the web dashboard build on every push and pull request against
+  [github.com/Bleebitz/binnacle-connect-app](https://github.com/Bleebitz/binnacle-connect-app)
+  — [first green run](https://github.com/Bleebitz/binnacle-connect-app/actions/runs/35048699219).
+  The web bundle and debug APK are uploaded as workflow artifacts.
 
 ## Toolchain
 
-Verified against **Flutter 3.41.4 (Dart 3.11.1)**, `flutter doctor` clean,
-on Windows with the Android SDK (platform 36.1, build-tools 36.1.0)
-installed and licensed. No version manager (FVM etc.) is in use — this is
-a single-developer local project so far; if it grows a second machine or a
-CI runner, pin the toolchain properly at that point rather than assuming
-"whatever's on PATH" stays consistent. Until then, if something behaves
-differently on your machine, check your `flutter --version` against the
-one above first.
+Pinned to **Flutter 3.41.4 (Dart 3.11.1)** — see `flutter_app/.fvmrc`,
+which is the single source of truth this repo's CI workflow is kept in
+sync with by hand (`subosito/flutter-action`'s `flutter-version:` doesn't
+read `.fvmrc` automatically; if you bump one, bump the other). Verified
+with `flutter doctor` clean on Windows with the Android SDK (platform
+36.1, build-tools 36.1.0) installed and licensed. FVM itself isn't
+installed/required locally — `.fvmrc` exists as the pinned-version record
+CI and contributors check against, not as a mandatory tool dependency.
 
 ## App mode: demo vs. core
 
@@ -70,12 +71,13 @@ by name but don't restate them.
   every screen, not just Capture — including tapping through the Compete
   leaderboards, favoriting a Library clip, and triggering/dismissing the
   MOB alert.
-- `flutter build apk --debug`: succeeds, and the APK has been installed and
-  launched on an Android emulator (API 36) — confirmed rendering correctly
-  (including the demo-mode `Simulated` status) and confirmed basic tab
-  navigation works without crashing. Not yet tried on a physical device or
-  as a release build.
-- `connect_audit.py`: passes clean against `flutter_app/lib`.
+- `flutter build apk --debug`: succeeds, both locally and in CI. The APK
+  has been installed and launched on an **Android emulator** (API 36) —
+  confirmed rendering correctly (including the demo-mode `Simulated`
+  status) and confirmed basic tab navigation works without crashing.
+  **Not yet installed/launched on a physical device**, and not yet built
+  as a release build — both still open.
+- `connect_audit.py`: passes clean against `flutter_app/lib`, in CI too.
 - No iOS build has been attempted (no Xcode available where this was
   built).
 - No connection to real hardware exists yet. Demo mode (the default —
