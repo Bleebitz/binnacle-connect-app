@@ -32,3 +32,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # Real GoPro development footage (VER-01), bundled so demo mode has a
+    # genuinely playable Library clip instead of a dead mediaUrl — see
+    # library_screen.dart's seedDemo(). Clearly a demo asset, never
+    # presented as Core-backed media (mediaUrl for a real clip only ever
+    # comes from HttpMediaCatalogService, a real Core fetch).
+    - assets/demo/gopro_dev_footage.mp4
