@@ -1,4 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for the app's actual function (the control channel and
+         telemetry sockets to a paired Core over WSS in core mode), not just
+         for Flutter's dev tooling — the debug/profile manifests' copy of
+         this permission is scoped to development only and does NOT carry
+         over to a release build, so it has to be declared here too or a
+         release build silently has no network access. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="binnacle_connect"
         android:name="${applicationName}"

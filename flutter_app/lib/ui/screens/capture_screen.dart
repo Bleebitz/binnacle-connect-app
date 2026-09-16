@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_config.dart';
 import '../../core/models/clip.dart' show ClipKind;
 import '../../core/models/vessel_state.dart';
 import '../../core/services/control_channel_service.dart';
@@ -33,6 +34,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   final _webrtc = WebRtcService();
   bool _flash = false;
   String? _saveToast;
+  bool _saveToastIsError = false;
   Timer? _toastTimer;
   String _preset = 'wakesurf';
 
@@ -49,9 +51,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
     });
   }
 
-  void _showSaveToast(String text) {
+  void _showSaveToast(String text, {bool isError = false}) {
     _toastTimer?.cancel();
-    setState(() => _saveToast = text);
+    setState(() {
+      _saveToast = text;
+      _saveToastIsError = isError;
+    });
     _toastTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _saveToast = null);
     });
@@ -59,14 +64,33 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   /// A spectator's allowed command set is empty by design (§3) — every
   /// command throws CommandRejected until this device is paired as crew or
-  /// owner. That's correct for a real deployment, but left uncaught it kills
-  /// the rest of the tap handler (e.g. the acknowledge button's setState
-  /// never runs), so this demo build stays usable without a paired device.
-  static void _send(void Function() action) {
+  /// owner. In demo mode (no real Core to ever accept anything) that would
+  /// make every button a dead end, so callers are expected to treat a demo-
+  /// mode rejection as "proceed anyway" — see [_completeIfSent]. In core
+  /// mode a rejection is real and must NOT be papered over: returning
+  /// whether the command actually sent, instead of swallowing the outcome
+  /// entirely, is what lets callers tell the difference.
+  static bool _send(void Function() action) {
     try {
       action();
+      return true;
     } on CommandRejected {
-      // Expected pre-pairing; local UI still reflects the attempted action.
+      return false;
+    }
+  }
+
+  /// Gates a "the thing happened" side effect (creating a clip, dismissing
+  /// the MOB banner, ...) on whether the command actually succeeded — except
+  /// in demo mode, where nothing is real anyway and the whole point is a
+  /// usable demo regardless of role/pairing state. In core mode, a rejected
+  /// command shows [failureMessage] and leaves state exactly as it was: the
+  /// app must never claim a save/acknowledge happened that the Core didn't
+  /// actually confirm.
+  void _completeIfSent(bool sent, {required VoidCallback onSuccess, required String failureMessage}) {
+    if (sent || AppConfig.isDemo) {
+      onSuccess();
+    } else {
+      _showSaveToast(failureMessage, isError: true);
     }
   }
 
@@ -163,19 +187,31 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       child: _CaptureRow(
                         manual: state.framing.isManual,
                         onSnapshot: () {
-                          _send(() => control.snapshot(actor: 'levi'));
-                          context.read<ClipRepository>().addFromCapture(kind: ClipKind.photo, preset: _preset);
-                          _fireFlash();
-                          _showSaveToast('Snapshot saved');
+                          final sent = _send(() => control.snapshot(actor: 'levi'));
+                          _completeIfSent(
+                            sent,
+                            failureMessage: 'Snapshot failed — command rejected',
+                            onSuccess: () {
+                              context.read<ClipRepository>().addFromCapture(kind: ClipKind.photo, preset: _preset);
+                              _fireFlash();
+                              _showSaveToast('Snapshot saved');
+                            },
+                          );
                         },
                         onHighlight: () {
-                          _send(() => control.saveHighlight(
+                          final sent = _send(() => control.saveHighlight(
                                 preS: state.capture.preRollSeconds,
                                 postS: state.capture.postRollSeconds,
                                 actor: 'levi',
                               ));
-                          context.read<ClipRepository>().addFromCapture(kind: ClipKind.highlight, preset: _preset);
-                          _showSaveToast('Highlight saved');
+                          _completeIfSent(
+                            sent,
+                            failureMessage: 'Highlight failed — command rejected',
+                            onSuccess: () {
+                              context.read<ClipRepository>().addFromCapture(kind: ClipKind.highlight, preset: _preset);
+                              _showSaveToast('Highlight saved');
+                            },
+                          );
                         },
                         onOrient: () => _send(() => control.setControlMode(
                               state.framing.isManual ? 'ai' : 'manual',
@@ -201,7 +237,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                           child: AnimatedOpacity(
                             duration: const Duration(milliseconds: 200),
                             opacity: _saveToast == null ? 0 : 1,
-                            child: _SaveToast(text: _saveToast ?? ''),
+                            child: _SaveToast(text: _saveToast ?? '', isError: _saveToastIsError),
                           ),
                         ),
                       ),
@@ -213,9 +249,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
                         lon: '114.74215° W',
                         headingDegrees: 128,
                         onAcknowledge: () {
-                          _send(() => control.acknowledgeMob(actor: 'levi'));
-                          context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
-                          mobAlert.acknowledge();
+                          // "Alerts reflect Core state, not locally invented
+                          // state" — a real MOB alert is Core-authoritative,
+                          // so a rejected acknowledge must NOT clear the
+                          // local banner or fabricate a clip.
+                          final sent = _send(() => control.acknowledgeMob(actor: 'levi'));
+                          _completeIfSent(
+                            sent,
+                            failureMessage: 'Acknowledge failed — command rejected',
+                            onSuccess: () {
+                              context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
+                              mobAlert.acknowledge();
+                            },
+                          );
                         },
                       ),
                     ),
@@ -764,23 +810,24 @@ class _PressScaleState extends State<_PressScale> {
 
 class _SaveToast extends StatelessWidget {
   final String text;
-  const _SaveToast({required this.text});
+  final bool isError;
+  const _SaveToast({required this.text, this.isError = false});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: BinnacleColors.teal.withValues(alpha: 0.95),
+        color: (isError ? BinnacleColors.orange : BinnacleColors.teal).withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(15),
       ),
       child: Text(
         text,
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'Space Grotesk',
           fontWeight: FontWeight.w600,
           fontSize: 11,
-          color: BinnacleColors.navyDeep,
+          color: isError ? Colors.white : BinnacleColors.navyDeep,
         ),
       ),
     );

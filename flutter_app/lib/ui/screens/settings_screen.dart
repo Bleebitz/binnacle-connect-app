@@ -51,7 +51,7 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 16),
           _Section(title: 'Device', children: [
             _Row('Connection', control.status.name.toUpperCase()),
-            _Row('Compute', 'PI 5 · HAILO-8'),
+            _Row('Compute', 'Jetson Nano'),
             _Row('Transport', 'HTTPS/WSS · C-07'),
             _Row('On disconnect', 'HOLD STATE · KEEP RECORDING'),
           ]),
@@ -64,7 +64,7 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             'Running on simulated data until Vision hardware is assembled and Track is '
-            'validated on the Hailo target. This is a Connect UX/architecture prototype, '
+            'validated on the Jetson Nano target. This is a Connect UX/architecture prototype, '
             'not an implementation — see Binnacle_Connect_App_Architecture_Flutter_Spec.',
             style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11, height: 1.5),
           ),

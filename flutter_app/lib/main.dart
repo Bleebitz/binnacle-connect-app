@@ -101,7 +101,14 @@ class BinnacleConnectApp extends StatelessWidget {
         ),
 
         ChangeNotifierProvider(create: (_) => MobAlertState()),
-        ChangeNotifierProvider(create: (_) => TelemetrySocket()..startSimulated()),
+        // Only fabricate telemetry in demo mode. A core-mode build with no
+        // real telemetry connection yet should show honest zero/default
+        // values, not simulated numbers that look like a live boat.
+        ChangeNotifierProvider(create: (_) {
+          final telemetry = TelemetrySocket();
+          if (AppConfig.isDemo) telemetry.startSimulated();
+          return telemetry;
+        }),
         ChangeNotifierProvider(create: (_) => ClipRepository()..seedDemo()),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
