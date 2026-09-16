@@ -9,9 +9,9 @@ import '../../core/services/telemetry_socket.dart';
 import '../../core/services/webrtc_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/eptz_video_view.dart';
-import '../widgets/gauge_painter.dart';
 import '../widgets/mob_alert_banner.dart';
 import '../widgets/simulated_wake_view.dart';
+import '../widgets/telemetry_overlay.dart';
 
 // Layout and componentry follow the retro-hero / technical-instrument UX
 // prototype's capture screen (screen-capture) as closely as native widgets
@@ -108,12 +108,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   children: [
                     EptzVideoView(
                       service: _webrtc,
-                      simulatedBuilder: (_) => const Stack(
+                      simulatedBuilder: (_) => Stack(
                         fit: StackFit.expand,
                         children: [
-                          SimulatedWakeView(),
+                          const SimulatedWakeView(),
                           Center(
-                            child: Icon(Icons.gps_fixed, color: BinnacleColors.tealBright, size: 36),
+                            child: ProximityReticle(riderDistanceM: telemetry.latest.riderDistanceM),
                           ),
                         ],
                       ),
@@ -124,7 +124,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       child: _HudTag(text: '${state.triggerMode.toUpperCase()} TRIGGER'),
                     ),
                     const Positioned(top: 9, right: 9, child: _HudTag(text: '16:9 · 1080p', dim: true)),
-                    Positioned(left: 9, bottom: 54, child: _TelemetryChip(telemetry: telemetry)),
+                    Positioned(left: 9, bottom: 54, child: TelemetryOverlay(telemetry: telemetry)),
                     Positioned(
                       right: 9,
                       top: 0,
@@ -879,26 +879,6 @@ class _QuickAdjustHandle extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _TelemetryChip extends StatelessWidget {
-  final TelemetrySocket telemetry;
-  const _TelemetryChip({required this.telemetry});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(children: [
-      TelemetryGauge(value: (telemetry.latest.speedMph / 30).clamp(0, 1), maxLabel: 30, unit: 'MPH', size: 52),
-      const SizedBox(width: 6),
-      TelemetryGauge(
-        value: (telemetry.latest.riderDistanceM / 20).clamp(0, 1),
-        maxLabel: 20,
-        unit: 'M',
-        size: 52,
-        accent: BinnacleColors.amber,
-      ),
-    ]);
   }
 }
 

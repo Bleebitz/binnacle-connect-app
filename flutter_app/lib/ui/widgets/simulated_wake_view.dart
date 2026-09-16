@@ -19,7 +19,22 @@ class _SimulatedWakeViewState extends State<SimulatedWakeView> with SingleTicker
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 6),
-  )..repeat();
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Respect the platform's reduce-motion setting, and — just as
+    // importantly — keep this perpetual animation from making
+    // WidgetTester.pumpAndSettle() hang forever in tests, which also set
+    // this flag (see test/widget_test.dart). A single static frame is a
+    // fine fallback either way.
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
 
   @override
   void dispose() {

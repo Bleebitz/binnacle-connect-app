@@ -7,6 +7,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:binnacle_connect/main.dart';
 
 void main() {
+  setUp(() {
+    // The Capture screen's simulated video background animates forever
+    // (SimulatedWakeView), which would make every pumpAndSettle() below
+    // hang indefinitely. Disabling animations is also what that widget
+    // checks to respect a real device's reduce-motion setting.
+    TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+  });
+
   testWidgets('App launches, renders nav, and starts on Capture',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
