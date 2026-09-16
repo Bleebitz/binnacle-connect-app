@@ -50,6 +50,14 @@ class ControlChannelService extends ChangeNotifier {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
   Timer? _pendingSweeper;
+  Timer? _retryTimer;
+  Timer? _connectDeadline;
+  Uri? _endpoint;
+  String? _deviceId;
+  int _generation = 0;
+  int _retryAttempt = 0;
+  int? _lastSequence;
+  DeviceCredential? _attachedCredential;
 
   final bool demo;
   ControlChannelService({bool? demo}) : demo = demo ?? AppConfig.isDemo {
@@ -92,7 +100,45 @@ class ControlChannelService extends ChangeNotifier {
   /// Supplies the credential and role. Injected rather than owned so the
   /// pairing lifecycle stays in one place.
   PairingService? _pairing;
-  void attachPairing(PairingService p) => _pairing = p;
+  void attachPairing(PairingService p) {
+    final changed = _attachedCredential != p.credential;
+    _pairing = p;
+    _attachedCredential = p.credential;
+    if (!demo && changed) {
+      _closeTransport();
+      status = LinkStatus.offline;
+      _retryAttempt = 0;
+    }
+  }
+
+  void _closeTransport() {
+    _generation++;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _connectDeadline?.cancel();
+    _pendingSweeper?.cancel();
+    _subscription?.cancel();
+    _subscription = null;
+    _channel?.sink.close();
+    _channel = null;
+    _lastSequence = null;
+    _failOutstanding();
+  }
+
+  void _lostConnection(int generation) {
+    if (_disposed || generation != _generation) return;
+    _closeTransport();
+    _setStatus(LinkStatus.offline);
+    if (!isPaired || _endpoint == null || _deviceId == null) return;
+    final seconds = 1 << _retryAttempt.clamp(0, 5);
+    _retryAttempt++;
+    _retryTimer = Timer(Duration(seconds: seconds), () {
+      _retryTimer = null;
+      if (!_disposed && isPaired) {
+        connect(deviceId: _deviceId!, endpoint: _endpoint!);
+      }
+    });
+  }
 
   DeviceRole get role => _pairing?.role ?? DeviceRole.spectator; // fail closed
   bool get isPaired => _pairing?.isPaired ?? false;
@@ -109,6 +155,21 @@ class ControlChannelService extends ChangeNotifier {
   Future<void> connect({required String deviceId, required Uri endpoint, String? authToken}) async {
     if (demo) throw StateError('Demo cannot open a Core socket');
     if (!isPaired) throw CommandRejected('not_paired');
+    if (_pairing!.credential!.deviceId != deviceId ||
+        (endpoint.host != _pairing!.credential!.coreHost &&
+         !(endpoint.host == '127.0.0.1' && _pairing!.credential!.coreHost == 'localhost'))) {
+      throw CommandRejected('credential_target_mismatch');
+    }
+    if (endpoint.scheme != 'wss' &&
+        !(endpoint.scheme == 'ws' && (endpoint.host == '127.0.0.1' || endpoint.host == 'localhost'))) {
+      throw CommandRejected('secure_transport_required');
+    }
+    if (_disposed) throw StateError('Control channel disposed');
+    if (_channel != null && _endpoint == endpoint && _deviceId == deviceId) return;
+    _closeTransport();
+    _endpoint = endpoint;
+    _deviceId = deviceId;
+    final generation = _generation;
     status = LinkStatus.connecting;
     notifyListeners();
     try {
@@ -126,13 +187,14 @@ class ControlChannelService extends ChangeNotifier {
         }),
       );
       _subscription = _channel!.stream.listen(
-        _onMessage,
-        onDone: () => _setStatus(LinkStatus.offline),
-        onError: (_) => _setStatus(LinkStatus.offline),
+        (raw) { if (generation == _generation) _onMessage(raw); },
+        onDone: () => _lostConnection(generation),
+        onError: (_) => _lostConnection(generation),
       );
+      _connectDeadline = Timer(const Duration(seconds: 10), () => _lostConnection(generation));
       _pendingSweeper = Timer.periodic(const Duration(seconds: 1), (_) => _sweepPending());
     } catch (_) {
-      _setStatus(LinkStatus.offline);
+      _lostConnection(generation);
     }
   }
 
@@ -151,8 +213,15 @@ class ControlChannelService extends ChangeNotifier {
             payload['health'] is! Map ||
             payload['health']['temp_c'] is! num ||
             payload['health']['storage_free_pct'] is! int ||
-            payload['health']['thermal_state'] is! String) return;
+            payload['health']['thermal_state'] is! String) {
+          return;
+        }
+        final seq = payload['seq'] as int;
+        if (_lastSequence != null && seq <= _lastSequence!) return;
         state = VesselState.fromJson(j['payload']);
+        _lastSequence = seq;
+        _connectDeadline?.cancel();
+        _retryAttempt = 0;
         manualFramingFlagged = state.framing.isManual;
         lastSeen = DateTime.now();
         _setStatus(LinkStatus.connected);
@@ -164,8 +233,8 @@ class ControlChannelService extends ChangeNotifier {
         }
         notifyListeners();
       }
-    } catch (e) {
-      debugPrint('ControlChannelService: malformed message ignored: $e');
+    } catch (_) {
+      debugPrint('ControlChannelService: malformed message ignored');
     }
   }
 
@@ -177,6 +246,11 @@ class ControlChannelService extends ChangeNotifier {
   }
 
   void _sweepPending() {
+    if (!isPaired) {
+      _closeTransport();
+      _setStatus(LinkStatus.offline);
+      return;
+    }
     final now = DateTime.now();
     final timedOut = _pending.values
         .where((p) => now.difference(p.sentAt) > const Duration(seconds: 2))
@@ -191,7 +265,7 @@ class ControlChannelService extends ChangeNotifier {
     if (status == LinkStatus.connected && silentFor > const Duration(seconds: 15)) {
       _setStatus(LinkStatus.stale);
     } else if (status == LinkStatus.stale && silentFor > const Duration(seconds: 45)) {
-      _setStatus(LinkStatus.offline);
+      _lostConnection(_generation);
     }
     if (timedOut.isNotEmpty) notifyListeners();
   }
@@ -283,10 +357,7 @@ class ControlChannelService extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _failOutstanding();
-    _pendingSweeper?.cancel();
-    _subscription?.cancel();
-    _channel?.sink.close();
+    _closeTransport();
     super.dispose();
   }
 }

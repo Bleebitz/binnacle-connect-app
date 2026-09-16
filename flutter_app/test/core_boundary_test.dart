@@ -9,6 +9,55 @@ import 'package:binnacle_connect/core/services/command_result.dart';
 import 'package:binnacle_connect/core/services/pairing_service.dart';
 
 void main() {
+  test('Socket reconnects without replaying commands; unpair stops retry', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final peers = <WebSocket>[];
+    var commands = 0;
+    final pairing = PairingService();
+    pairing.credential = DeviceCredential(credentialId: 'test', deviceId: 'test',
+        coreHost: 'localhost', role: DeviceRole.owner, issuedAt: DateTime.now(), bearerToken: 'test');
+    final control = ControlChannelService(demo: false)..attachPairing(pairing);
+    server.listen((request) async {
+      final peer = await WebSocketTransformer.upgrade(request);
+      peers.add(peer);
+      peer.listen((_) { commands++; });
+      peer.add(jsonEncode({'topic': 'state', 'payload': {
+        'seq': 1, 'ts': DateTime.now().toUtc().toIso8601String(),
+        'capture': {'armed': true},
+        'health': {'temp_c': 38, 'storage_free_pct': 70, 'thermal_state': 'nominal'},
+      }}));
+    });
+    Future<void> until(bool Function() ready) async {
+      for (var i = 0; i < 300 && !ready(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(ready(), isTrue);
+    }
+    try {
+      final endpoint = Uri.parse('ws://127.0.0.1:${server.port}');
+      await control.connect(deviceId: 'test', endpoint: endpoint);
+      await until(() => control.status == LinkStatus.connected);
+      final command = control.sendConfirmed('snapshot', {});
+      await until(() => commands == 1);
+      await peers.first.close();
+      expect((await command).outcome, CommandOutcome.disconnected);
+      await until(() => peers.length == 2 && control.status == LinkStatus.connected);
+      expect(commands, 1);
+      await control.connect(deviceId: 'test', endpoint: endpoint);
+      expect(peers.length, 2);
+      await pairing.unpair();
+      control.attachPairing(pairing);
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect(control.status, LinkStatus.offline);
+      expect(peers.length, 2);
+    } finally {
+      control.dispose();
+      pairing.dispose();
+      for (final peer in peers) { await peer.close(); }
+      await server.close(force: true);
+    }
+  });
+
   test('Core starts offline and rejects commands before pairing', () {
     final control = ControlChannelService(demo: false);
     expect(control.status, LinkStatus.offline);
