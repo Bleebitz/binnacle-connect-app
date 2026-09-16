@@ -104,6 +104,12 @@ class ClipRepository extends ChangeNotifier {
         riderId: 'levi',
         favorite: true,
         capturedAt: now.subtract(const Duration(minutes: 9)),
+        // Real GoPro development footage (VER-01), bundled as a Flutter
+        // asset — genuinely playable in demo mode, not a dead URL. Still
+        // demo data: this is not Core-backed media (see Clip.mediaUrl's
+        // doc comment) and mediaUrl for a real clip only ever comes from
+        // HttpMediaCatalogService's real Core fetch.
+        mediaUrl: 'assets/demo/gopro_dev_footage.mp4',
       ),
       Clip(
         id: 'seed-${_seq++}',
@@ -351,6 +357,12 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
 
   bool get _hasRealMedia => widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
 
+  /// Download/share only make sense for a real Core-hosted link — a bundled
+  /// demo asset (a local `assets/...` path, see seedDemo()) is genuinely
+  /// playable but isn't a URL `url_launcher`/`share_plus` can do anything
+  /// useful with.
+  bool get _isRemoteMedia => _hasRealMedia && !widget.clip.mediaUrl!.startsWith('assets/');
+
   @override
   void dispose() {
     _player?.dispose();
@@ -360,7 +372,12 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   Future<void> _play() async {
     final url = widget.clip.mediaUrl;
     if (url == null) return;
-    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    // A bundled demo asset (see seedDemo()) is a local path, not an http(s)
+    // URL — a real Core-backed clip's mediaUrl always comes from
+    // HttpMediaCatalogService and is always http(s).
+    final controller = url.startsWith('assets/')
+        ? VideoPlayerController.asset(url)
+        : VideoPlayerController.networkUrl(Uri.parse(url));
     setState(() => _player = controller);
     try {
       await controller.initialize();
@@ -427,6 +444,14 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
                     : 'No media available for this clip yet.',
                 style: const TextStyle(color: BinnacleColors.slate, fontSize: 12),
               ),
+            )
+          else if (!_isRemoteMedia)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Text(
+                'Bundled demo footage — plays locally; not downloadable or shareable as a link.',
+                style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
+              ),
             ),
           const SizedBox(height: 16),
           Row(children: [
@@ -440,14 +465,14 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
             const SizedBox(width: 8),
             IconButton(
               tooltip: 'Download',
-              onPressed: clip.mediaUrl == null
+              onPressed: !_isRemoteMedia
                   ? null
                   : () => launchUrl(Uri.parse(clip.mediaUrl!), mode: LaunchMode.externalApplication),
               icon: const Icon(Icons.download_outlined),
             ),
             IconButton(
               tooltip: 'Share',
-              onPressed: clip.mediaUrl == null
+              onPressed: !_isRemoteMedia
                   ? null
                   : () => Share.share(clip.mediaUrl!, subject: clip.title),
               icon: const Icon(Icons.ios_share),
