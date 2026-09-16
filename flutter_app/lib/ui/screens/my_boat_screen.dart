@@ -62,29 +62,30 @@ class MyBoatScreen extends StatelessWidget {
             // Vision's own liveness isn't modeled separately from the
             // control-channel link yet — they're the same signal here
             // honestly, not two independent checks dressed up as two.
-            statusLine: _connectionLine(control.status),
-            accent: _connectionColor(control.status),
+            statusLine: 'Vision readiness not reported',
+            accent: BinnacleColors.slate,
           ),
           const SizedBox(height: 10),
           _StatusCard(
             icon: Icons.gps_fixed,
             title: 'Track ready',
-            statusLine: state.capture.armed ? 'Tracking active' : 'Tracking paused',
-            accent: state.capture.armed ? BinnacleColors.tealBright : BinnacleColors.slate,
+            statusLine: 'Track readiness not reported',
+            accent: BinnacleColors.slate,
           ),
           const SizedBox(height: 10),
           _StatusCard(
             icon: state.capture.recording ? Icons.fiber_manual_record : Icons.circle_outlined,
-            title: state.capture.recording ? 'Recording — pass ${state.capture.passNumber}' : 'Buffering',
-            statusLine: state.capture.recording
+            title: !control.hasCurrentState ? 'Recording state unknown' : state.capture.recording ? 'Recording — pass ${state.capture.passNumber}' : 'Not recording',
+            statusLine: !control.hasCurrentState ? 'Awaiting Core state' : state.capture.recording
                 ? 'trigger: ${state.capture.triggerSource}'
-                : 'Ready — nothing missed',
+                : 'Awaiting capture',
             accent: state.capture.recording ? BinnacleColors.orange : BinnacleColors.tealBright,
           ),
           const SizedBox(height: 10),
           _RiderCard(crew: crew),
           const SizedBox(height: 10),
-          _HealthCard(health: state.health),
+          if (control.hasCurrentState) _HealthCard(health: state.health)
+          else const Text('Core health unavailable'),
           const SizedBox(height: 20),
           if (!pairing.isPaired)
             SizedBox(
@@ -124,7 +125,7 @@ class MyBoatScreen extends StatelessWidget {
         LinkStatus.connecting => 'Connecting…',
         LinkStatus.connected => 'Connected',
         LinkStatus.stale => 'Not responding',
-        LinkStatus.offline => 'Offline — still recording',
+        LinkStatus.offline => 'Offline — recording state unknown',
       };
 
   static Color _connectionColor(LinkStatus s) => switch (s) {

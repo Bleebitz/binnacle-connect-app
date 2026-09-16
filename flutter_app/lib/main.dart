@@ -91,9 +91,9 @@ class BinnacleConnectApp extends StatelessWidget {
             // session, which is the point: an honest "Simulated" badge
             // instead of a connection attempt that immediately fails and
             // shows "Offline" on every single demo run.
-            if (AppConfig.mode == AppMode.core && service.status == LinkStatus.simulated) {
+            if (AppConfig.mode == AppMode.core && pairing.isPaired && service.status == LinkStatus.offline) {
               service.connect(
-                deviceId: 'vision-0001',
+                deviceId: pairing.credential!.deviceId,
                 endpoint: AppConfig.coreWebSocketEndpoint(),
               );
             }
@@ -110,7 +110,11 @@ class BinnacleConnectApp extends StatelessWidget {
           if (AppConfig.isDemo) telemetry.startSimulated();
           return telemetry;
         }),
-        ChangeNotifierProvider(create: (_) => ClipRepository()..seedDemo()),
+        ChangeNotifierProvider(create: (_) {
+          final clips = ClipRepository();
+          if (AppConfig.isDemo) clips.seedDemo();
+          return clips;
+        }),
         ChangeNotifierProvider(create: (_) => CrewRepository()),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),

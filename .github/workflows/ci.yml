@@ -39,6 +39,10 @@ jobs:
         working-directory: flutter_app
         run: flutter test
 
+      - name: Core mode data boundary regression
+        working-directory: flutter_app
+        run: flutter test test/live_mode_test.dart --dart-define=BINNACLE_APP_MODE=core --dart-define=BINNACLE_CORE_URL=https://core.invalid
+
       - name: flutter build web (proves it actually compiles end to end)
         working-directory: flutter_app
         run: flutter build web

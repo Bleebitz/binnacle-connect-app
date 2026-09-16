@@ -3,6 +3,72 @@
 Binnacle Connect — the phone and cloud companion app for Vision/Track, and
 its web dashboard/marketing site.
 
+## BIN-32 implementation checkpoint — 2026-09-15
+
+Started from inspected `main` at `3916e7c`, preserving its My Boat / Live /
+Session / Library / Community navigation and all Community/Compete source.
+Connect owns phone/cloud software and the operator interface; Spotter is
+physical display hardware, governed by approved Charter Amendment 1 v2.
+
+Two controlled increments on `bin-32/live-core-boundaries`:
+
+1. Core mode starts offline with unknown readiness, an empty Library, no
+   demo camera scene and no fabricated telemetry readout. Demo media import,
+   capture creation and pairing helpers reject Core-mode calls. Community
+   remains usable in Demo and is explicitly sequenced behind live integration
+   in Core mode. Removed the hard-coded compute model. Capture waits for a
+   matching acknowledgment, distinguishes rejection/timeout/disconnect, and
+   never inserts fabricated Core clips. Even an acknowledgment is described
+   as acknowledgment, not proof that playable media exists.
+2. Socket lifecycle closes prior subscriptions/timers, applies 1/2/4/8/16/32s
+   reconnect backoff, has a 10s initial-state deadline, ignores old-connection
+   callbacks and non-increasing state sequences, and cancels pending commands
+   on lost links. Unpairing/credential replacement closes the old connection;
+   expired credentials fail closed. Commands are never replayed. Credential
+   device/host matching and encrypted transport are required (loopback-only
+   plain WebSocket is permitted for automated tests).
+
+Client tests use the existing provisional `topic/payload` envelope. A capture
+acknowledgment must contain its matching `id` and a boolean `ok`; missing or
+malformed outcomes are not success. This acknowledgment wire shape is a
+client integration assumption, NOT a verified firmware contract. The socket
+path and query-token authentication inherited from the scaffold still require
+Core contract/security review before real deployment.
+
+Verification for these increments:
+
+- Flutter 3.41.4 / Dart 3.11.1, matching `.fvmrc`.
+- 15 tests pass (7 retained UI tests and 8 service/socket tests). The Core-mode
+  widget test is intentionally skipped in the default Demo run; run it separately:
+  `flutter test test/live_mode_test.dart --dart-define=BINNACLE_APP_MODE=core --dart-define=BINNACLE_CORE_URL=https://core.invalid`.
+  That separate test passes and is now included in CI.
+- `dart analyze`: exit 0, no errors/warnings; 44 info-level style findings.
+- Static policy audit: no findings (Windows needs `PYTHONUTF8=1`).
+- Core-mode web build passed after both increments. Build warnings mention
+  optional Cupertino font assets; no web build failure.
+- Android release build reached Gradle/CMake configuration but the managed
+  Windows environment could not execute the installed NDK `clang.exe`; no APK
+  was produced. This is recorded as an environment-blocked check, not release
+  or physical-device acceptance.
+- Lockfile reconciled to the pinned Flutter SDK's dependency constraints.
+
+**Still open; BIN-32 is not Done:** real pairing transport, QR camera scanning,
+hardware-backed key generation, secure credential persistence, approved live
+telemetry/readiness schema, authenticated WebRTC, Core media catalog and actual
+Library playback/export. The linked Core firmware pairing requirements specify
+request/response fields but identify the firmware as unimplemented and do not
+provide implemented endpoint paths or a test target. No physical Core or Android
+device session has been demonstrated here. INTERNET permission was already in
+the release manifest at the inspected baseline; that alone does not establish
+Android release-network acceptance.
+
+Physical acceptance must record device/firmware/app revisions and demonstrate
+pair → authenticated connection → live telemetry/video → rider/Track state →
+capture acknowledgment → actual Library playback. Include unauthorized/expired
+credentials, certificate mismatch, AP restart, phone sleep/resume, Internet-off
+LAN operation, link loss, rejection and timeout. No simulated result closes
+this gate. The historical status section below describes the prior baseline.
+
 ## What's in this repo
 
 - `flutter_app/` — the Connect mobile app. Flutter/Dart, per the decided

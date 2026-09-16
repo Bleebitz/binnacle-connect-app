@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/app_config.dart';
 import '../../core/models/clip.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
@@ -41,6 +42,7 @@ class ClipRepository extends ChangeNotifier {
   /// [addFromCapture] for the demo-only bridge that makes the button presses
   /// visible here in the meantime.
   void seedDemo() {
+    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
     if (_clips.isNotEmpty) return;
     final now = DateTime.now();
     _clips.addAll([
@@ -93,6 +95,7 @@ class ClipRepository extends ChangeNotifier {
   /// to something visible here — see [seedDemo] docs above for why this
   /// exists instead of a real Core-backed clip feed.
   void addFromCapture({required ClipKind kind, required String preset}) {
+    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
     add(Clip(
       id: 'live-${_seq++}',
       title: kind == ClipKind.photo ? 'Snapshot — $preset' : 'Highlight — $preset',
@@ -111,6 +114,7 @@ class ClipRepository extends ChangeNotifier {
   /// checkbox. Returns the created clip so the caller can submit it
   /// immediately.
   Clip importFallClip() {
+    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
     final clip = Clip(
       id: 'import-${_seq++}',
       title: 'Imported fall clip',

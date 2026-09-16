@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/app_config.dart';
 import '../theme/binnacle_theme.dart';
 import '../../core/services/webrtc_service.dart';
 
@@ -26,8 +27,9 @@ class EptzVideoView extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            simulatedBuilder(context),
-            if (!service.renderer.isAttached)
+            if (AppConfig.isDemo) simulatedBuilder(context)
+            else const Center(child: Text('Live video unavailable — awaiting Core media integration')),
+            if (AppConfig.isDemo)
               Positioned(
                 top: 10,
                 right: 10,

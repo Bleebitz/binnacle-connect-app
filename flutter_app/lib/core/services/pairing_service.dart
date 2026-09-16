@@ -367,7 +367,7 @@ class PairingService extends ChangeNotifier {
         // honestly instead of hanging or fabricating success.
         transport = transport ?? (AppConfig.isDemo ? NoOpPairingTransport() : HttpPairingTransport());
 
-  DeviceRole get role => credential?.role ?? DeviceRole.spectator; // fail closed
+  DeviceRole get role => isPaired ? credential!.role : DeviceRole.spectator; // fail closed
   bool get isPaired => credential != null && !credential!.isExpired;
 
   Future<void> restore() async {
@@ -421,6 +421,7 @@ class PairingService extends ChangeNotifier {
     required bool unclaimed,
     required DeviceRole role,
   }) async {
+    if (!AppConfig.isDemo) throw StateError('Demo pairing is unavailable in Core mode');
     busy = true;
     notifyListeners();
     await Future.delayed(const Duration(milliseconds: 400));

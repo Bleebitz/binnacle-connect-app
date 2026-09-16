@@ -6,7 +6,6 @@
 import 'package:basic_utils/basic_utils.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pointycastle/export.dart' show ECPublicKey;
 
 import 'package:binnacle_connect/core/services/pairing_service.dart';
 

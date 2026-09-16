@@ -51,21 +51,21 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 16),
           _Section(title: 'Device', children: [
             _Row('Connection', control.status.name.toUpperCase()),
-            _Row('Compute', 'Jetson Nano'),
+            _Row('Compute', 'Not reported by Core'),
             _Row('Transport', 'HTTPS/WSS · C-07'),
             _Row('On disconnect', 'HOLD STATE · KEEP RECORDING'),
           ]),
           const SizedBox(height: 16),
           _Section(title: 'Safety', children: [
-            _Row('Fall detection', state.safety.fallDetection ? 'ALWAYS ON' : '—'),
-            _Row('MOB alert', state.safety.mobAlert ? 'ALWAYS ON' : '—'),
+            _Row('Fall detection', 'Readiness unknown'),
+            _Row('MOB alert', 'Readiness unknown'),
             _Row('Escalation', '${state.safety.escalationSeconds}s'),
           ]),
           const SizedBox(height: 16),
           Text(
-            'Running on simulated data until Vision hardware is assembled and Track is '
-            'validated on the Jetson Nano target. This is a Connect UX/architecture prototype, '
-            'not an implementation — see Binnacle_Connect_App_Architecture_Flutter_Spec.',
+            'Connect is the phone/cloud operator interface. Spotter is physical display hardware. '
+            'Safety must remain always on; runtime readiness, pairing and media integration '
+            'still require Core verification.',
             style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11, height: 1.5),
           ),
         ],

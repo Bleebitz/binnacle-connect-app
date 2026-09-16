@@ -19,6 +19,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/vessel_state.dart';
 import '../models/credential.dart';
 import 'pairing_service.dart';
+import '../app_config.dart';
+import 'command_result.dart';
 
 // Commands that MUST NEVER EXIST. Per protocol §1.2: absence, not a
 // confirmation dialog. If a caller ever tries one of these, it is rejected
@@ -46,10 +48,50 @@ class CommandRejected implements Exception {
 class ControlChannelService extends ChangeNotifier {
   final Uuid _uuid = const Uuid();
   WebSocketChannel? _channel;
+  StreamSubscription<dynamic>? _subscription;
   Timer? _pendingSweeper;
+  Timer? _retryTimer;
+  Timer? _connectDeadline;
+  Uri? _endpoint;
+  String? _deviceId;
+  int _generation = 0;
+  int _retryAttempt = 0;
+  int? _lastSequence;
+  DeviceCredential? _attachedCredential;
 
-  LinkStatus status = LinkStatus.simulated;
-  VesselState state = VesselState.simulated();
+  final bool demo;
+  ControlChannelService({bool? demo}) : demo = demo ?? AppConfig.isDemo {
+    status = this.demo ? LinkStatus.simulated : LinkStatus.offline;
+    state = this.demo ? VesselState.simulated() : VesselState.fromJson({});
+  }
+  late LinkStatus status;
+  late VesselState state;
+  bool get hasCurrentState => demo || status == LinkStatus.connected;
+  final Map<String, Completer<CommandResult>> _results = {};
+  final Map<String, Timer> _resultTimers = {};
+
+  Future<CommandResult> sendConfirmed(String command, Map<String, dynamic> params,
+      {Duration timeout = const Duration(seconds: 5)}) {
+    final id = sendCommand(command, params);
+    final result = Completer<CommandResult>();
+    _results[id] = result;
+    _resultTimers[id] = Timer(timeout,
+        () => _finish(id, const CommandResult(CommandOutcome.timedOut)));
+    return result.future;
+  }
+
+  void _finish(String id, CommandResult result) {
+    _pending.remove(id);
+    _resultTimers.remove(id)?.cancel();
+    _results.remove(id)?.complete(result);
+  }
+
+  void _failOutstanding() {
+    for (final id in _results.keys.toList()) {
+      _finish(id, const CommandResult(CommandOutcome.disconnected));
+    }
+    _pending.clear();
+  }
   DateTime lastSeen = DateTime.now();
   final Map<String, PendingCommand> _pending = {};
 
@@ -58,7 +100,45 @@ class ControlChannelService extends ChangeNotifier {
   /// Supplies the credential and role. Injected rather than owned so the
   /// pairing lifecycle stays in one place.
   PairingService? _pairing;
-  void attachPairing(PairingService p) => _pairing = p;
+  void attachPairing(PairingService p) {
+    final changed = _attachedCredential != p.credential;
+    _pairing = p;
+    _attachedCredential = p.credential;
+    if (!demo && changed) {
+      _closeTransport();
+      status = LinkStatus.offline;
+      _retryAttempt = 0;
+    }
+  }
+
+  void _closeTransport() {
+    _generation++;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _connectDeadline?.cancel();
+    _pendingSweeper?.cancel();
+    _subscription?.cancel();
+    _subscription = null;
+    _channel?.sink.close();
+    _channel = null;
+    _lastSequence = null;
+    _failOutstanding();
+  }
+
+  void _lostConnection(int generation) {
+    if (_disposed || generation != _generation) return;
+    _closeTransport();
+    _setStatus(LinkStatus.offline);
+    if (!isPaired || _endpoint == null || _deviceId == null) return;
+    final seconds = 1 << _retryAttempt.clamp(0, 5);
+    _retryAttempt++;
+    _retryTimer = Timer(Duration(seconds: seconds), () {
+      _retryTimer = null;
+      if (!_disposed && isPaired) {
+        connect(deviceId: _deviceId!, endpoint: _endpoint!);
+      }
+    });
+  }
 
   DeviceRole get role => _pairing?.role ?? DeviceRole.spectator; // fail closed
   bool get isPaired => _pairing?.isPaired ?? false;
@@ -73,6 +153,23 @@ class ControlChannelService extends ChangeNotifier {
   /// establishes the client-side pattern (auth token, reconnect, LWT-style
   /// availability) so swapping in the real URL is a one-line change.
   Future<void> connect({required String deviceId, required Uri endpoint, String? authToken}) async {
+    if (demo) throw StateError('Demo cannot open a Core socket');
+    if (!isPaired) throw CommandRejected('not_paired');
+    if (_pairing!.credential!.deviceId != deviceId ||
+        (endpoint.host != _pairing!.credential!.coreHost &&
+         !(endpoint.host == '127.0.0.1' && _pairing!.credential!.coreHost == 'localhost'))) {
+      throw CommandRejected('credential_target_mismatch');
+    }
+    if (endpoint.scheme != 'wss' &&
+        !(endpoint.scheme == 'ws' && (endpoint.host == '127.0.0.1' || endpoint.host == 'localhost'))) {
+      throw CommandRejected('secure_transport_required');
+    }
+    if (_disposed) throw StateError('Control channel disposed');
+    if (_channel != null && _endpoint == endpoint && _deviceId == deviceId) return;
+    _closeTransport();
+    _endpoint = endpoint;
+    _deviceId = deviceId;
+    final generation = _generation;
     status = LinkStatus.connecting;
     notifyListeners();
     try {
@@ -89,48 +186,77 @@ class ControlChannelService extends ChangeNotifier {
           if (token != null) 'token': token,
         }),
       );
-      _channel!.stream.listen(
-        _onMessage,
-        onDone: () => _setStatus(LinkStatus.offline),
-        onError: (_) => _setStatus(LinkStatus.offline),
+      _subscription = _channel!.stream.listen(
+        (raw) { if (generation == _generation) _onMessage(raw); },
+        onDone: () => _lostConnection(generation),
+        onError: (_) => _lostConnection(generation),
       );
+      _connectDeadline = Timer(const Duration(seconds: 10), () => _lostConnection(generation));
       _pendingSweeper = Timer.periodic(const Duration(seconds: 1), (_) => _sweepPending());
     } catch (_) {
-      _setStatus(LinkStatus.offline);
+      _lostConnection(generation);
     }
   }
 
   void _onMessage(dynamic raw) {
+    if (_disposed) return;
     try {
       final Map<String, dynamic> j = jsonDecode(raw as String);
       final topic = j['topic'] as String?;
       if (topic == 'state') {
+        final payload = j['payload'];
+        if (payload is! Map<String, dynamic> ||
+            payload['seq'] is! int ||
+            payload['ts'] is! String ||
+            DateTime.tryParse(payload['ts']) == null ||
+            payload['capture'] is! Map ||
+            payload['health'] is! Map ||
+            payload['health']['temp_c'] is! num ||
+            payload['health']['storage_free_pct'] is! int ||
+            payload['health']['thermal_state'] is! String) {
+          return;
+        }
+        final seq = payload['seq'] as int;
+        if (_lastSequence != null && seq <= _lastSequence!) return;
         state = VesselState.fromJson(j['payload']);
+        _lastSequence = seq;
+        _connectDeadline?.cancel();
+        _retryAttempt = 0;
         manualFramingFlagged = state.framing.isManual;
         lastSeen = DateTime.now();
         _setStatus(LinkStatus.connected);
       } else if (topic == 'ack') {
         final id = j['payload']['id'] as String?;
-        if (id != null) _pending.remove(id);
+        if (id != null && j['payload']['ok'] is bool) {
+          _finish(id, CommandResult(j['payload']['ok'] == true
+              ? CommandOutcome.acknowledged : CommandOutcome.rejected));
+        }
         notifyListeners();
       }
-    } catch (e) {
-      debugPrint('ControlChannelService: malformed message ignored: $e');
+    } catch (_) {
+      debugPrint('ControlChannelService: malformed message ignored');
     }
   }
 
   void _setStatus(LinkStatus s) {
+    if (_disposed) return;
     status = s;
+    if (s == LinkStatus.offline || s == LinkStatus.stale) _failOutstanding();
     notifyListeners();
   }
 
   void _sweepPending() {
+    if (!isPaired) {
+      _closeTransport();
+      _setStatus(LinkStatus.offline);
+      return;
+    }
     final now = DateTime.now();
     final timedOut = _pending.values
         .where((p) => now.difference(p.sentAt) > const Duration(seconds: 2))
         .toList();
     for (final p in timedOut) {
-      _pending.remove(p.id);
+      if (!_results.containsKey(p.id)) _pending.remove(p.id);
     }
     // On prolonged silence from the Core, degrade the displayed link status.
     // Per §1.1 / §4.3: the Core keeps recording regardless — the UI must say
@@ -139,7 +265,7 @@ class ControlChannelService extends ChangeNotifier {
     if (status == LinkStatus.connected && silentFor > const Duration(seconds: 15)) {
       _setStatus(LinkStatus.stale);
     } else if (status == LinkStatus.stale && silentFor > const Duration(seconds: 45)) {
-      _setStatus(LinkStatus.offline);
+      _lostConnection(_generation);
     }
     if (timedOut.isNotEmpty) notifyListeners();
   }
@@ -168,19 +294,19 @@ class ControlChannelService extends ChangeNotifier {
       'command': command,
       'params': params,
     };
-    if (status == LinkStatus.simulated) {
+    if (demo && status == LinkStatus.simulated) {
       // No real Core to talk to yet — simulate an ack so the UI is testable
       // end to end without hardware. This branch is the only place that
       // fabricates state; it must be removed once a real device pairs.
       Future.delayed(const Duration(milliseconds: 150), () {
-        _pending.remove(id);
-        notifyListeners();
+        _finish(id, const CommandResult(CommandOutcome.acknowledged));
+        if (!_disposed) notifyListeners();
       });
       _pending[id] = PendingCommand(id, command, DateTime.now());
       notifyListeners();
       return id;
     }
-    if (_channel == null || status == LinkStatus.offline) {
+    if (_channel == null || status != LinkStatus.connected || !isPaired) {
       throw CommandRejected('link_offline');
     }
     _pending[id] = PendingCommand(id, command, DateTime.now());
@@ -227,10 +353,11 @@ class ControlChannelService extends ChangeNotifier {
 
   void stopBroadcast({String? actor}) => sendCommand('stop_broadcast', {}, actor: actor);
 
+  bool _disposed = false;
   @override
   void dispose() {
-    _pendingSweeper?.cancel();
-    _channel?.sink.close();
+    _disposed = true;
+    _closeTransport();
     super.dispose();
   }
 }
