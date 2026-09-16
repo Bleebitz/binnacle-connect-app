@@ -7,6 +7,7 @@ import '../../core/app_config.dart';
 import '../../core/models/clip.dart' show ClipKind;
 import '../../core/models/vessel_state.dart';
 import '../../core/services/control_channel_service.dart';
+import '../../core/services/command_result.dart';
 import '../../core/services/mob_alert_state.dart';
 import '../../core/services/telemetry_socket.dart';
 import '../../core/services/webrtc_service.dart';
@@ -94,6 +95,32 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
   }
 
+  Future<void> _capture(ControlChannelService control, ClipKind kind) async {
+    if (AppConfig.isDemo) {
+      context.read<ClipRepository>().addFromCapture(kind: kind, preset: _preset);
+      if (kind == ClipKind.photo) _fireFlash();
+      _showSaveToast('Demo capture saved');
+      return;
+    }
+    final command = kind == ClipKind.photo ? 'snapshot' : 'save_highlight';
+    if (control.isPending(command)) return;
+    try {
+      _showSaveToast('Waiting for Core confirmation');
+      final result = await control.sendConfirmed(command, kind == ClipKind.photo ? {} : {
+        'pre_s': control.state.capture.preRollSeconds,
+        'post_s': control.state.capture.postRollSeconds,
+      });
+      if (!mounted) return;
+      if (result.outcome == CommandOutcome.acknowledged) {
+        _showSaveToast('Core acknowledged — media availability pending');
+      } else {
+        _showSaveToast('Capture not confirmed: ${result.outcome.name}', isError: true);
+      }
+    } on CommandRejected {
+      if (mounted) _showSaveToast('Capture unavailable — check pairing and Core link', isError: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final control = context.watch<ControlChannelService>();
@@ -108,7 +135,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: ListView(
           padding: const EdgeInsets.only(bottom: 24),
           children: [
-            _TopBar(health: state.health),
+            if (control.hasCurrentState) _TopBar(health: state.health)
+            else const ListTile(title: Text('Connect'), subtitle: Text('Core health unavailable')),
             _PresetRow(
               selected: _preset,
               onPreset: (p) {
@@ -137,7 +165,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
               ),
             ),
             const SizedBox(height: 9),
-            _RecStateCard(capture: state.capture),
+            if (control.hasCurrentState) _RecStateCard(capture: state.capture)
+            else const Text('Recording state unknown — awaiting Core'),
             const SizedBox(height: 9),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -186,33 +215,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       bottom: 9,
                       child: _CaptureRow(
                         manual: state.framing.isManual,
-                        onSnapshot: () {
-                          final sent = _send(() => control.snapshot(actor: 'levi'));
-                          _completeIfSent(
-                            sent,
-                            failureMessage: 'Snapshot failed — command rejected',
-                            onSuccess: () {
-                              context.read<ClipRepository>().addFromCapture(kind: ClipKind.photo, preset: _preset);
-                              _fireFlash();
-                              _showSaveToast('Snapshot saved');
-                            },
-                          );
-                        },
-                        onHighlight: () {
-                          final sent = _send(() => control.saveHighlight(
-                                preS: state.capture.preRollSeconds,
-                                postS: state.capture.postRollSeconds,
-                                actor: 'levi',
-                              ));
-                          _completeIfSent(
-                            sent,
-                            failureMessage: 'Highlight failed — command rejected',
-                            onSuccess: () {
-                              context.read<ClipRepository>().addFromCapture(kind: ClipKind.highlight, preset: _preset);
-                              _showSaveToast('Highlight saved');
-                            },
-                          );
-                        },
+                        onSnapshot: () => _capture(control, ClipKind.photo),
+                        onHighlight: () => _capture(control, ClipKind.highlight),
                         onOrient: () => _send(() => control.setControlMode(
                               state.framing.isManual ? 'ai' : 'manual',
                               actor: 'levi',

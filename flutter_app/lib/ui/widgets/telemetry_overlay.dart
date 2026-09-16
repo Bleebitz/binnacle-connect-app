@@ -12,6 +12,7 @@ class TelemetryOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (telemetry.history.isEmpty) return const Text('Telemetry unavailable');
     final speed = telemetry.latest.speedMph;
     final history = telemetry.history;
     return Column(

@@ -19,6 +19,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/vessel_state.dart';
 import '../models/credential.dart';
 import 'pairing_service.dart';
+import '../app_config.dart';
+import 'command_result.dart';
 
 // Commands that MUST NEVER EXIST. Per protocol §1.2: absence, not a
 // confirmation dialog. If a caller ever tries one of these, it is rejected
@@ -46,10 +48,42 @@ class CommandRejected implements Exception {
 class ControlChannelService extends ChangeNotifier {
   final Uuid _uuid = const Uuid();
   WebSocketChannel? _channel;
+  StreamSubscription<dynamic>? _subscription;
   Timer? _pendingSweeper;
 
-  LinkStatus status = LinkStatus.simulated;
-  VesselState state = VesselState.simulated();
+  final bool demo;
+  ControlChannelService({bool? demo}) : demo = demo ?? AppConfig.isDemo {
+    status = this.demo ? LinkStatus.simulated : LinkStatus.offline;
+    state = this.demo ? VesselState.simulated() : VesselState.fromJson({});
+  }
+  late LinkStatus status;
+  late VesselState state;
+  bool get hasCurrentState => demo || status == LinkStatus.connected;
+  final Map<String, Completer<CommandResult>> _results = {};
+  final Map<String, Timer> _resultTimers = {};
+
+  Future<CommandResult> sendConfirmed(String command, Map<String, dynamic> params,
+      {Duration timeout = const Duration(seconds: 5)}) {
+    final id = sendCommand(command, params);
+    final result = Completer<CommandResult>();
+    _results[id] = result;
+    _resultTimers[id] = Timer(timeout,
+        () => _finish(id, const CommandResult(CommandOutcome.timedOut)));
+    return result.future;
+  }
+
+  void _finish(String id, CommandResult result) {
+    _pending.remove(id);
+    _resultTimers.remove(id)?.cancel();
+    _results.remove(id)?.complete(result);
+  }
+
+  void _failOutstanding() {
+    for (final id in _results.keys.toList()) {
+      _finish(id, const CommandResult(CommandOutcome.disconnected));
+    }
+    _pending.clear();
+  }
   DateTime lastSeen = DateTime.now();
   final Map<String, PendingCommand> _pending = {};
 
@@ -73,6 +107,8 @@ class ControlChannelService extends ChangeNotifier {
   /// establishes the client-side pattern (auth token, reconnect, LWT-style
   /// availability) so swapping in the real URL is a one-line change.
   Future<void> connect({required String deviceId, required Uri endpoint, String? authToken}) async {
+    if (demo) throw StateError('Demo cannot open a Core socket');
+    if (!isPaired) throw CommandRejected('not_paired');
     status = LinkStatus.connecting;
     notifyListeners();
     try {
@@ -89,7 +125,7 @@ class ControlChannelService extends ChangeNotifier {
           if (token != null) 'token': token,
         }),
       );
-      _channel!.stream.listen(
+      _subscription = _channel!.stream.listen(
         _onMessage,
         onDone: () => _setStatus(LinkStatus.offline),
         onError: (_) => _setStatus(LinkStatus.offline),
@@ -101,17 +137,31 @@ class ControlChannelService extends ChangeNotifier {
   }
 
   void _onMessage(dynamic raw) {
+    if (_disposed) return;
     try {
       final Map<String, dynamic> j = jsonDecode(raw as String);
       final topic = j['topic'] as String?;
       if (topic == 'state') {
+        final payload = j['payload'];
+        if (payload is! Map<String, dynamic> ||
+            payload['seq'] is! int ||
+            payload['ts'] is! String ||
+            DateTime.tryParse(payload['ts']) == null ||
+            payload['capture'] is! Map ||
+            payload['health'] is! Map ||
+            payload['health']['temp_c'] is! num ||
+            payload['health']['storage_free_pct'] is! int ||
+            payload['health']['thermal_state'] is! String) return;
         state = VesselState.fromJson(j['payload']);
         manualFramingFlagged = state.framing.isManual;
         lastSeen = DateTime.now();
         _setStatus(LinkStatus.connected);
       } else if (topic == 'ack') {
         final id = j['payload']['id'] as String?;
-        if (id != null) _pending.remove(id);
+        if (id != null && j['payload']['ok'] is bool) {
+          _finish(id, CommandResult(j['payload']['ok'] == true
+              ? CommandOutcome.acknowledged : CommandOutcome.rejected));
+        }
         notifyListeners();
       }
     } catch (e) {
@@ -120,7 +170,9 @@ class ControlChannelService extends ChangeNotifier {
   }
 
   void _setStatus(LinkStatus s) {
+    if (_disposed) return;
     status = s;
+    if (s == LinkStatus.offline || s == LinkStatus.stale) _failOutstanding();
     notifyListeners();
   }
 
@@ -130,7 +182,7 @@ class ControlChannelService extends ChangeNotifier {
         .where((p) => now.difference(p.sentAt) > const Duration(seconds: 2))
         .toList();
     for (final p in timedOut) {
-      _pending.remove(p.id);
+      if (!_results.containsKey(p.id)) _pending.remove(p.id);
     }
     // On prolonged silence from the Core, degrade the displayed link status.
     // Per §1.1 / §4.3: the Core keeps recording regardless — the UI must say
@@ -168,19 +220,19 @@ class ControlChannelService extends ChangeNotifier {
       'command': command,
       'params': params,
     };
-    if (status == LinkStatus.simulated) {
+    if (demo && status == LinkStatus.simulated) {
       // No real Core to talk to yet — simulate an ack so the UI is testable
       // end to end without hardware. This branch is the only place that
       // fabricates state; it must be removed once a real device pairs.
       Future.delayed(const Duration(milliseconds: 150), () {
-        _pending.remove(id);
-        notifyListeners();
+        _finish(id, const CommandResult(CommandOutcome.acknowledged));
+        if (!_disposed) notifyListeners();
       });
       _pending[id] = PendingCommand(id, command, DateTime.now());
       notifyListeners();
       return id;
     }
-    if (_channel == null || status == LinkStatus.offline) {
+    if (_channel == null || status != LinkStatus.connected || !isPaired) {
       throw CommandRejected('link_offline');
     }
     _pending[id] = PendingCommand(id, command, DateTime.now());
@@ -227,9 +279,13 @@ class ControlChannelService extends ChangeNotifier {
 
   void stopBroadcast({String? actor}) => sendCommand('stop_broadcast', {}, actor: actor);
 
+  bool _disposed = false;
   @override
   void dispose() {
+    _disposed = true;
+    _failOutstanding();
     _pendingSweeper?.cancel();
+    _subscription?.cancel();
     _channel?.sink.close();
     super.dispose();
   }
