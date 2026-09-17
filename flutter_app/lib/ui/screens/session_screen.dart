@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/models/clip.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/binnacle_background.dart';
 import '../widgets/empty_state.dart';
 import 'library_screen.dart' show ClipRepository;
 
@@ -24,31 +25,48 @@ class SessionScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final clips = context.watch<ClipRepository>().clips;
-    final sorted = [...clips]..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+    final sorted = [...clips]
+      ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+
+    // Brand background behind the empty state (nothing else on screen to
+    // compete with it); the populated timeline keeps a plain background so
+    // a growing list of real entries stays the dominant, legible content.
+    if (sorted.isEmpty) {
+      return BinnacleBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              title: const Text('Session')),
+          body: const BinnacleEmptyState(
+            icon: Icons.timeline_outlined,
+            title: 'No session yet',
+            subtitle:
+                'Arm Track and start capturing —\nyour passes, highlights, and falls show up here.',
+            accent: BinnacleColors.tealBright,
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Session')),
-      body: sorted.isEmpty
-          ? const BinnacleEmptyState(
-              icon: Icons.timeline_outlined,
-              title: 'No session yet',
-              subtitle: 'Arm Track and start capturing —\nyour passes, highlights, and falls show up here.',
-              accent: BinnacleColors.tealBright,
-            )
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _SessionSummary(clips: sorted),
-                const SizedBox(height: 16),
-                ..._withDayHeaders(sorted).map((entry) => entry.$1 != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(bottom: 8, top: 12),
-                        child: Text(entry.$1!,
-                            style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.slate)),
-                      )
-                    : _TimelineEntry(clip: entry.$2!)),
-              ],
-            ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _SessionSummary(clips: sorted),
+          const SizedBox(height: 16),
+          ..._withDayHeaders(sorted).map((entry) => entry.$1 != null
+              ? Padding(
+                  padding: const EdgeInsets.only(bottom: 8, top: 12),
+                  child: Text(entry.$1!,
+                      style: BinnacleTheme.mono(
+                          size: 10.5, color: BinnacleColors.slate)),
+                )
+              : _TimelineEntry(clip: entry.$2!)),
+        ],
+      ),
     );
   }
 
@@ -71,7 +89,8 @@ class SessionScreen extends StatelessWidget {
 
   static String _dayLabel(DateTime t) {
     final now = DateTime.now();
-    final isToday = t.year == now.year && t.month == now.month && t.day == now.day;
+    final isToday =
+        t.year == now.year && t.month == now.month && t.day == now.day;
     if (isToday) return 'TODAY';
     return '${t.month}/${t.day}/${t.year}'.toUpperCase();
   }
@@ -97,7 +116,8 @@ class _SessionSummary extends StatelessWidget {
           colors: [BinnacleColors.navyRaised, BinnacleColors.navy],
         ),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
+        border:
+            Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
       ),
       child: Row(
         children: [
@@ -122,9 +142,15 @@ class _Stat extends StatelessWidget {
       child: Column(
         children: [
           Text('$count',
-              style: const TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 20, color: BinnacleColors.tealBright)),
+              style: const TextStyle(
+                  fontFamily: 'Space Grotesk',
+                  fontWeight: FontWeight.w700,
+                  fontSize: 20,
+                  color: BinnacleColors.tealBright)),
           const SizedBox(height: 2),
-          Text(label, style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.slateDim)),
+          Text(label,
+              style: BinnacleTheme.mono(
+                  size: 8.5, color: BinnacleColors.slateDim)),
         ],
       ),
     );
@@ -139,7 +165,10 @@ class _TimelineEntry extends StatelessWidget {
   Widget build(BuildContext context) {
     final (icon, accent) = switch (clip.kind) {
       ClipKind.fall => (Icons.warning_amber_rounded, BinnacleColors.orange),
-      ClipKind.photo => (Icons.photo_camera_outlined, BinnacleColors.tealBright),
+      ClipKind.photo => (
+          Icons.photo_camera_outlined,
+          BinnacleColors.tealBright
+        ),
       ClipKind.highlight => (Icons.videocam_outlined, BinnacleColors.amber),
     };
     return Padding(
@@ -152,10 +181,15 @@ class _TimelineEntry extends StatelessWidget {
               Container(
                 width: 30,
                 height: 30,
-                decoration: BoxDecoration(color: accent.withValues(alpha: 0.15), shape: BoxShape.circle),
+                decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.15),
+                    shape: BoxShape.circle),
                 child: Icon(icon, size: 15, color: accent),
               ),
-              Container(width: 1.5, height: 22, color: BinnacleColors.offWhite.withValues(alpha: 0.08)),
+              Container(
+                  width: 1.5,
+                  height: 22,
+                  color: BinnacleColors.offWhite.withValues(alpha: 0.08)),
             ],
           ),
           const SizedBox(width: 12),
@@ -163,12 +197,15 @@ class _TimelineEntry extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(clip.title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                Text(clip.title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 13)),
                 const SizedBox(height: 2),
                 Text(
                   '${_riderLabel(clip.riderId)} · ${_timeLabel(clip.capturedAt)}'
                   '${clip.duration > Duration.zero ? ' · ${clip.duration.inSeconds}s' : ''}',
-                  style: BinnacleTheme.mono(size: 10, color: BinnacleColors.slate),
+                  style:
+                      BinnacleTheme.mono(size: 10, color: BinnacleColors.slate),
                 ),
               ],
             ),
@@ -178,8 +215,9 @@ class _TimelineEntry extends StatelessWidget {
     );
   }
 
-  static String _riderLabel(String riderId) =>
-      riderId.isEmpty ? 'Unknown rider' : riderId[0].toUpperCase() + riderId.substring(1);
+  static String _riderLabel(String riderId) => riderId.isEmpty
+      ? 'Unknown rider'
+      : riderId[0].toUpperCase() + riderId.substring(1);
 
   static String _timeLabel(DateTime t) {
     final h = t.hour % 12 == 0 ? 12 : t.hour % 12;

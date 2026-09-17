@@ -4,6 +4,7 @@ import '../../core/services/control_channel_service.dart';
 import '../../core/services/pairing_service.dart';
 import '../../core/models/credential.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/binnacle_background.dart';
 import 'pairing_screen.dart';
 import 'device_list_screen.dart';
 
@@ -16,59 +17,71 @@ class SettingsScreen extends StatelessWidget {
     final pairing = context.watch<PairingService>();
     final state = control.state;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _Section(title: 'Pairing', children: [
-            ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-              title: Text(pairing.isPaired ? 'Paired as ${pairing.role.label}' : 'Not paired'),
-              subtitle: Text(
-                pairing.isPaired ? pairing.role.description : 'This device is a spectator until paired',
-                style: const TextStyle(fontSize: 11),
-              ),
-              trailing: const Icon(Icons.chevron_right, size: 18),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const PairingScreen()),
-              ),
-            ),
-            // Owner-only navigation gate. UX convenience — the Core enforces
-            // the real boundary on every command regardless of what this app
-            // shows or hides.
-            if (pairing.role == DeviceRole.owner)
+    return BinnacleBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            title: const Text('Settings')),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _Section(title: 'Pairing', children: [
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                title: const Text('Paired devices'),
-                subtitle: const Text('View and revoke access', style: TextStyle(fontSize: 11)),
+                title: Text(pairing.isPaired
+                    ? 'Paired as ${pairing.role.label}'
+                    : 'Not paired'),
+                subtitle: Text(
+                  pairing.isPaired
+                      ? pairing.role.description
+                      : 'This device is a spectator until paired',
+                  style: const TextStyle(fontSize: 11),
+                ),
                 trailing: const Icon(Icons.chevron_right, size: 18),
                 onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const DeviceListScreen()),
+                  MaterialPageRoute(builder: (_) => const PairingScreen()),
                 ),
               ),
-          ]),
-          const SizedBox(height: 16),
-          _Section(title: 'Device', children: [
-            _Row('Connection', control.status.name.toUpperCase()),
-            _Row('Compute', 'Not reported by Core'),
-            _Row('Transport', 'HTTPS/WSS · C-07'),
-            _Row('On disconnect', 'HOLD STATE · KEEP RECORDING'),
-          ]),
-          const SizedBox(height: 16),
-          _Section(title: 'Safety', children: [
-            _Row('Fall detection', 'Readiness unknown'),
-            _Row('MOB alert', 'Readiness unknown'),
-            _Row('Escalation', '${state.safety.escalationSeconds}s'),
-          ]),
-          const SizedBox(height: 16),
-          Text(
-            'Connect is the phone/cloud operator interface. Spotter is physical display hardware. '
-            'Safety must remain always on; runtime readiness, pairing and media integration '
-            'still require Core verification.',
-            style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11, height: 1.5),
-          ),
-        ],
+              // Owner-only navigation gate. UX convenience — the Core enforces
+              // the real boundary on every command regardless of what this app
+              // shows or hides.
+              if (pairing.role == DeviceRole.owner)
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  title: const Text('Paired devices'),
+                  subtitle: const Text('View and revoke access',
+                      style: TextStyle(fontSize: 11)),
+                  trailing: const Icon(Icons.chevron_right, size: 18),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const DeviceListScreen()),
+                  ),
+                ),
+            ]),
+            const SizedBox(height: 16),
+            _Section(title: 'Device', children: [
+              _Row('Connection', control.status.name.toUpperCase()),
+              _Row('Compute', 'Not reported by Core'),
+              _Row('Transport', 'HTTPS/WSS · C-07'),
+              _Row('On disconnect', 'HOLD STATE · KEEP RECORDING'),
+            ]),
+            const SizedBox(height: 16),
+            _Section(title: 'Safety', children: [
+              _Row('Fall detection', 'Readiness unknown'),
+              _Row('MOB alert', 'Readiness unknown'),
+              _Row('Escalation', '${state.safety.escalationSeconds}s'),
+            ]),
+            const SizedBox(height: 16),
+            Text(
+              'Connect is the phone/cloud operator interface. Spotter is physical display hardware. '
+              'Safety must remain always on; runtime readiness, pairing and media integration '
+              'still require Core verification.',
+              style: TextStyle(
+                  color: BinnacleColors.slateDim, fontSize: 11, height: 1.5),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -90,13 +103,17 @@ class _Section extends StatelessWidget {
       child: Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
-          child: Align(alignment: Alignment.centerLeft, child: Text(title, style: Theme.of(context).textTheme.titleMedium)),
+          child: Align(
+              alignment: Alignment.centerLeft,
+              child:
+                  Text(title, style: Theme.of(context).textTheme.titleMedium)),
         ),
         // Material(type: transparency) so ListTile children paint ink
         // splashes correctly — the outer Container's solid background
         // would otherwise hide them (Flutter raises this as a hard
         // assertion in debug/test builds, caught by the widget test).
-        Material(type: MaterialType.transparency, child: Column(children: children)),
+        Material(
+            type: MaterialType.transparency, child: Column(children: children)),
       ]),
     );
   }
@@ -113,7 +130,9 @@ class _Row extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Text(label),
-        Text(value, style: BinnacleTheme.mono(size: 11, color: BinnacleColors.tealBright)),
+        Text(value,
+            style:
+                BinnacleTheme.mono(size: 11, color: BinnacleColors.tealBright)),
       ]),
     );
   }
