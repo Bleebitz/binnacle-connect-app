@@ -30,7 +30,10 @@ class ConnectStartup extends StatefulWidget {
   static const minimumDuration = Duration(milliseconds: 3500);
   static const transitionDuration = Duration(milliseconds: 450);
   static const backgroundAsset = 'assets/backgrounds/wave_glow.png';
-  static const logoAsset = 'assets/brand/binnacle_logo.png';
+  // The dark-background variant (brushed-silver, dimensional lettering) —
+  // not the original asset, whose dark-navy-on-navy lettering reads poorly
+  // against this screen's wave background. See its own module doc.
+  static const logoAsset = 'assets/brand/binnacle_logo_dark_bg.png';
 
   /// Test-only escape hatch (same idiom as Flutter's own `debugDisableShadows`
   /// etc.) — skips the entire readiness gate and animation, finishing

@@ -553,3 +553,101 @@ re-signed under a different identity.
   release-mode configuration, per instruction.
 - The 3.5 s floor and transition were confirmed via timestamped screenshots and the automated
   test suite's fake-clock assertions, not a physical stopwatch against the device.
+
+---
+
+## 6. LOGO LETTERING REFINEMENT — brighter, dimensional, readable BINNACLE / MARINE SYSTEMS
+
+**Date:** 2026-09-17 (same day, continuation on the still-open `connect-splash-v2-resilience`
+branch / PR #9 — not yet merged, so this refinement lands as an additional commit on the same
+PR rather than a new branch). **Checked current size first, per instruction:** the logo width
+formula in `connect_startup.dart` (`math.min(300.0, math.min(maxWidth*0.68, maxHeight*0.34))`)
+was already the ~2x-enlarged, responsive size from §5.2 — **not changed again** here; this section
+is lettering/color/dimension only.
+
+### 6.1 What was actually wrong
+
+The original `binnacle_logo.png` renders "BINNACLE" and "MARINE SYSTEMS" in a dark navy fill —
+readable on a light background, but low-contrast against this screen's dark navy/wave background
+even after the §5.2 enlargement. Confirmed by direct visual inspection of the (unchanged) asset
+before editing (`docs/evidence/s25_release_splash_full.png` / `s25_logo_v2_splash.png`'s "before"
+counterpart, both pre-existing in this evidence set).
+
+### 6.2 New asset, original preserved
+
+- **New file:** `flutter_app/assets/brand/binnacle_logo_dark_bg.png` (1345×1078 RGBA, same
+  canvas/shield/compass as the original, pixel-for-pixel except the two lettering bands below).
+- **Original file preserved unchanged:** `flutter_app/assets/brand/binnacle_logo.png` — still
+  registered in `pubspec.yaml`, just no longer referenced by any screen (the splash now points at
+  the new variant; the original remains available for a future light-background context).
+- **`connect_startup.dart`'s `logoAsset` constant repointed** to the new file — the only code
+  change needed to swap assets, since the glow/sizing logic already operates on whatever
+  `logoAsset` points to.
+
+### 6.3 Technique (real pixel editing, not a runtime filter)
+
+Done with Pillow + NumPy + SciPy (`distance_transform_edt`) directly on the artwork, isolating the
+two lettering bands via a precise alpha-channel row/column scan (found band `y`-ranges: shield
+51–805, "BINNACLE" 828–962, "MARINE SYSTEMS" 971–1038 — confirmed by scanning, not guessed) so the
+shield/compass pixels are never touched:
+
+1. **Bevel via distance-transform bump-mapping:** compute each letter's distance-to-edge field,
+   derive a synthetic surface normal from its gradient, and light it from a fixed upper-left
+   direction — a principled simulation of a machined bevel, not an arbitrary emboss filter. Bevel
+   width 7 px for "BINNACLE" (a defined, visible bevel) vs. 3 px for "MARINE SYSTEMS" (shallower,
+   per the brief).
+2. **Base fill:** a vertical brushed-metal gradient from an icy near-white blue at the top to a
+   deeper silver-blue at the bottom — "BINNACLE" `(238,246,250)→(176,202,214)`; "MARINE SYSTEMS"
+   brighter/flatter, `(248,251,253)→(214,228,234)`.
+3. **Specular highlight:** an extra brightness boost at the crest of the simulated bevel (where
+   the surface normal most directly faces the light) for crisp upper-left highlight streaks.
+4. **Drop shadow:** a short, blurred, dark-navy offset copy of each letter's mask placed *behind*
+   it — 6 px/5 px offset for "BINNACLE" (opacity 0.5), a noticeably shorter 3 px/3 px, lower-opacity
+   (0.32) shadow for "MARINE SYSTEMS", per "minimal shadow so the smaller letters remain readable."
+5. **Thin cyan edge light + restrained halo:** a 2 px-dilated ring right at each letter's boundary,
+   tinted cyan, moderate opacity — plus a separate, wider (6 px/3 px), much softer, low-opacity
+   (0.22/0.14) halo ring further out. Both are confined to the lettering's own alpha shape (via the
+   same distance/dilation approach used for the bevel), so **no glow spreads across the
+   surrounding rectangular canvas or blurs the letterforms themselves** — letter edges stay sharp
+   throughout.
+6. Re-inspected the composited result (on a navy backdrop matching the real splash background, and
+   at the actual ~280 px on-screen display width) before finalizing — see §6.4.
+
+### 6.4 Verification
+
+- **Full-size composite on navy:** confirms shield/compass pixel-identical to the original, both
+  text bands now bright and dimensional, no seams at the crop/paste boundaries.
+- **Actual display-size composite (300 px wide, matching the real on-screen size):** both
+  "BINNACLE" and "MARINE SYSTEMS" read clearly at the size they're actually shown at — this was
+  checked before treating the change as done, not only at full asset resolution.
+- **`flutter test test/startup_test.dart --dart-define=SPLASH_EVIDENCE=true`:** re-ran after the
+  asset swap — all 10 tests still pass; regenerated
+  [`docs/evidence/splash_412x917.png`](splash_412x917.png),
+  [`splash_360x640.png`](splash_360x640.png), and [`splash_915x412.png`](splash_915x412.png) show
+  the new lettering at all three previously-verified sizes, still with no overflow/clipping.
+- **`dart analyze`:** clean (0 errors/warnings, same 54 pre-existing info lints).
+- **`flutter test` (full suite):** 57/57 pass.
+- **Core-mode test:** 1/1 pass.
+- **`connect_audit.py`:** no findings.
+- **Physical device (same S25 Ultra, upgrade install, no data loss):** built
+  `flutter build apk --release --build-number=2005` (SHA-256
+  `53722202f848d9e25243602ffb09433c5713c827a88b33e8d6584aa112849265`) — **debug-signed
+  release-mode**, per the established signing configuration already in `build.gradle.kts`,
+  explicitly not production-signed. Installed via `adb install -r` over the existing `2004` build
+  (same signing certificate, accepted, no reinstall/data loss). `dumpsys package` confirmed
+  `versionCode=2005` installed and running after a cold `am force-stop` / `am start` cycle.
+  Screenshot [`docs/evidence/s25_logo_v2_splash.png`](s25_logo_v2_splash.png), captured ~0.6 s
+  after launch, shows "BINNACLE" and "MARINE SYSTEMS" both clearly legible, bright, and
+  dimensional on the real device — a genuine before/after improvement over
+  [`s25_release_splash_full.png`](s25_release_splash_full.png) (§5.7's earlier capture of the same
+  screen with the original dark-navy lettering).
+
+### 6.5 Remaining limitations
+
+- The bevel/lighting technique is bespoke to this specific artwork's two lettering bands (fixed
+  pixel-coordinate bands found by scanning this exact image); it is not a general, reusable
+  "relight any logo" utility.
+- No production-signed build was created or tested — same limitation as §5.7, unchanged by this
+  refinement.
+- The original `binnacle_logo.png` remains registered in `pubspec.yaml` but has no current screen
+  referencing it; it is kept for a possible future light-background use, not verified against one.
