@@ -43,3 +43,6 @@ flutter:
     # binnacle_background.dart. Deliberately not used behind the Live
     # camera view or Library's dense grid, where real media is the point.
     - assets/backgrounds/wave_glow.png
+    # Transparent Binnacle Marine Systems shield/compass mark — see
+    # splash_screen.dart, the only current user.
+    - assets/brand/binnacle_logo.png

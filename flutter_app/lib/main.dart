@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -163,11 +162,13 @@ class BinnacleConnectApp extends StatelessWidget {
   }
 }
 
-/// Shows the splash screen (brand background, no logic of its own) for a
-/// short fixed window while PairingService.restore() actually reads the
-/// stored credential — a real async op, not a fabricated delay. The window
-/// is a floor, not a wait-for: restore() runs concurrently and almost
-/// always finishes well within it.
+/// Shows the splash screen (brand moment, no logic of its own) until BOTH
+/// a minimum display floor AND PairingService.restore() — a real async
+/// Keychain/Keystore read, not a fabricated delay — have completed. This is
+/// a genuine readiness gate, not a fixed timer running alongside a
+/// fire-and-forgotten restore: whichever of the two takes longer decides
+/// when _RootShell (and with it, auth/navigation/deep-link handling and
+/// Core init) actually starts.
 class _AppStartup extends StatefulWidget {
   const _AppStartup();
 
@@ -176,13 +177,21 @@ class _AppStartup extends StatefulWidget {
 }
 
 class _AppStartupState extends State<_AppStartup> {
+  static const _minimumSplashDuration = Duration(milliseconds: 3500);
+
   bool _showSplash = true;
 
   @override
   void initState() {
     super.initState();
-    context.read<PairingService>().restore();
-    Timer(const Duration(milliseconds: 450), () {
+    // A failed credential read (corrupt Keychain/Keystore entry, platform
+    // channel unavailable, etc.) must not brick launch behind a permanent
+    // splash — restore() failing just means starting unpaired, which
+    // isPaired already treats as the fail-closed default.
+    final restoreFuture =
+        context.read<PairingService>().restore().catchError((_) {});
+    final minimumFloor = Future<void>.delayed(_minimumSplashDuration);
+    Future.wait([restoreFuture, minimumFloor]).then((_) {
       if (mounted) setState(() => _showSplash = false);
     });
   }
