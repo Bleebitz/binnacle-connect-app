@@ -15,6 +15,14 @@ class BinnacleColors {
   static const offWhite = Color(0xFFEDF1F2);
   static const slate = Color(0xFF7C93A3);
   static const slateDim = Color(0xFF4A5F6D);
+
+  /// Secondary/description text color for surfaces that must guarantee
+  /// WCAG AA (4.5:1) even on the lightest solid surface in the palette,
+  /// `navyRaised` — `slate` only clears ~4.2:1 there (fails). Added rather
+  /// than changing `slate` itself, since `slate` is used elsewhere for
+  /// contexts already verified against a different (darker) background —
+  /// see Community's readability pass for where this is used.
+  static const slateLight = Color(0xFF9CACB9);
 }
 
 class BinnacleTheme {

@@ -11,6 +11,8 @@ class BinnacleEmptyState extends StatelessWidget {
   final String title;
   final String subtitle;
   final Color accent;
+  final TextStyle? titleStyle;
+  final TextStyle? subtitleStyle;
 
   const BinnacleEmptyState({
     super.key,
@@ -18,6 +20,8 @@ class BinnacleEmptyState extends StatelessWidget {
     required this.title,
     required this.subtitle,
     this.accent = BinnacleColors.tealBright,
+    this.titleStyle,
+    this.subtitleStyle,
   });
 
   @override
@@ -33,13 +37,19 @@ class BinnacleEmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 15),
+              style: titleStyle ??
+                  const TextStyle(
+                      fontFamily: 'Space Grotesk',
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15),
             ),
             const SizedBox(height: 6),
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: TextStyle(color: BinnacleColors.slate, fontSize: 12.5, height: 1.4),
+              style: subtitleStyle ??
+                  const TextStyle(
+                      color: BinnacleColors.slate, fontSize: 12.5, height: 1.4),
             ),
           ],
         ),
@@ -59,7 +69,8 @@ class _GlowBadge extends StatefulWidget {
   State<_GlowBadge> createState() => _GlowBadgeState();
 }
 
-class _GlowBadgeState extends State<_GlowBadge> with SingleTickerProviderStateMixin {
+class _GlowBadgeState extends State<_GlowBadge>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 3),
@@ -100,10 +111,14 @@ class _GlowBadgeState extends State<_GlowBadge> with SingleTickerProviderStateMi
             shape: BoxShape.circle,
             color: widget.accent.withValues(alpha: 0.07 + t * 0.03),
             boxShadow: [
-              BoxShadow(color: widget.accent.withValues(alpha: 0.10 + t * 0.10), blurRadius: 22 + t * 10),
+              BoxShadow(
+                  color: widget.accent.withValues(alpha: 0.10 + t * 0.10),
+                  blurRadius: 22 + t * 10),
             ],
           ),
-          child: Icon(widget.icon, size: 30, color: widget.accent.withValues(alpha: 0.85 + t * 0.15)),
+          child: Icon(widget.icon,
+              size: 30,
+              color: widget.accent.withValues(alpha: 0.85 + t * 0.15)),
         );
       },
     );

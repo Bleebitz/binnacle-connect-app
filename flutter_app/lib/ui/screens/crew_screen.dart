@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/rider.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/solid_panel.dart';
 
 class CrewRepository extends ChangeNotifier {
   final List<Rider> _riders = [const Rider(id: 'r0', name: 'You')];
@@ -27,8 +28,12 @@ class CrewRepository extends ChangeNotifier {
     final reactions = Map<String, int>.from(s.reactions);
     reactions[emoji] = (reactions[emoji] ?? 0) + 1;
     _sessions[i] = CrewSession(
-      id: s.id, label: s.label, location: s.location,
-      riderIds: s.riderIds, clipIds: s.clipIds, reactions: reactions,
+      id: s.id,
+      label: s.label,
+      location: s.location,
+      riderIds: s.riderIds,
+      clipIds: s.clipIds,
+      reactions: reactions,
     );
     notifyListeners();
   }
@@ -50,13 +55,20 @@ class CrewScreen extends StatelessWidget {
         child: Column(
           children: [
             const Material(
-              color: Colors.transparent,
-              child: TabBar(tabs: [Tab(text: 'Sessions'), Tab(text: 'People')]),
+              color: BinnacleColors.navy,
+              child: TabBar(
+                tabs: [Tab(text: 'Sessions'), Tab(text: 'People')],
+                labelColor: BinnacleColors.tealBright,
+                unselectedLabelColor: BinnacleColors.slateLight,
+                indicatorColor: BinnacleColors.tealBright,
+              ),
             ),
             Expanded(
               child: TabBarView(children: [
-                _SessionsTab(sessions: repository.sessions, onReact: repository.react),
-                _PeopleTab(riders: repository.riders, onAdd: repository.addRider),
+                _SessionsTab(
+                    sessions: repository.sessions, onReact: repository.react),
+                _PeopleTab(
+                    riders: repository.riders, onAdd: repository.addRider),
               ]),
             ),
           ],
@@ -74,13 +86,28 @@ class _SessionsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (sessions.isEmpty) {
-      return const BinnacleEmptyState(
-        icon: Icons.directions_boat_filled_outlined,
-        title: 'No sessions yet',
-        subtitle: 'They show up automatically\nonce a highlight is saved on the water.',
-        accent: BinnacleColors.tealBright,
+      return const SolidPanel(
+        margin: EdgeInsets.all(20),
+        child: Center(
+          child: SingleChildScrollView(
+            child: BinnacleEmptyState(
+              icon: Icons.directions_boat_filled_outlined,
+              title: 'No sessions yet',
+              subtitle:
+                  'They show up automatically\nonce a highlight is saved on the water.',
+              accent: BinnacleColors.tealBright,
+              titleStyle: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: BinnacleColors.offWhite),
+              subtitleStyle: TextStyle(
+                  fontSize: 14, height: 1.4, color: BinnacleColors.slateLight),
+            ),
+          ),
+        ),
       );
     }
+
     return ListView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: sessions.length,
@@ -94,8 +121,15 @@ class _SessionsTab extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(s.label, style: Theme.of(context).textTheme.titleMedium),
-                Text(s.location, style: BinnacleTheme.mono(size: 10)),
+                Text(s.label,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: BinnacleColors.offWhite)),
+                const SizedBox(height: 2),
+                Text(s.location,
+                    style: BinnacleTheme.mono(
+                        size: 14, color: BinnacleColors.slateLight)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -123,14 +157,42 @@ class _PeopleTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = TextEditingController();
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(children: [
-            Expanded(child: TextField(controller: controller, decoration: const InputDecoration(hintText: 'Add a rider name'))),
+    return SolidPanel(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Column(
+        children: [
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                style: const TextStyle(
+                    color: BinnacleColors.offWhite, fontSize: 16),
+                decoration: InputDecoration(
+                  hintText: 'Add a rider name',
+                  hintStyle: const TextStyle(color: BinnacleColors.slateLight),
+                  filled: true,
+                  fillColor: BinnacleColors.navyRaised,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(
+                        color: BinnacleColors.offWhite.withValues(alpha: 0.15)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(
+                        color: BinnacleColors.tealBright, width: 2),
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(width: 8),
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: BinnacleColors.tealBright,
+                foregroundColor: BinnacleColors.navyDeep,
+              ),
               onPressed: () {
                 if (controller.text.trim().isNotEmpty) {
                   onAdd(controller.text.trim());
@@ -140,23 +202,33 @@ class _PeopleTab extends StatelessWidget {
               child: const Text('Add'),
             ),
           ]),
-        ),
-        Expanded(
-          child: ListView.builder(
-            itemCount: riders.length,
-            itemBuilder: (_, i) => ListTile(
-              leading: CircleAvatar(
-                backgroundColor: BinnacleColors.teal,
-                child: Text(riders[i].name.substring(0, 1)),
+          Expanded(
+            child: ListView.builder(
+              itemCount: riders.length,
+              itemBuilder: (_, i) => ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: BinnacleColors.teal,
+                  child: Text(riders[i].name.isEmpty
+                      ? '?'
+                      : riders[i].name.substring(0, 1)),
+                ),
+                title: Text(riders[i].name,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: BinnacleColors.offWhite)),
+                subtitle: Text(
+                  riders[i].biometricConsent
+                      ? 'Identification enabled'
+                      : 'No biometric consent on file',
+                  style: const TextStyle(
+                      fontSize: 14, color: BinnacleColors.slateLight),
+                ),
               ),
-              title: Text(riders[i].name),
-              subtitle: riders[i].biometricConsent
-                  ? const Text('Identification enabled', style: TextStyle(fontSize: 11))
-                  : const Text('No biometric consent on file', style: TextStyle(fontSize: 11)),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
