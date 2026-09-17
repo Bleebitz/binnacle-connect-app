@@ -220,7 +220,7 @@ task's scope, but it should not be silently omitted from the record.
    full detail. Not introduced by this task's changes; not reproduced or investigated against a
    release build.
 
-### Remaining limitations
+### Remaining limitations (as of the v1 work above)
 
 - The 16 KB page-size compatibility warning found during physical-device testing (§3, item 3
   above) is unresolved and out of this task's scope.
@@ -229,3 +229,327 @@ task's scope, but it should not be silently omitted from the record.
 - The wave-background watermark removal was a manual local-blur compositing step rather than a
   general-purpose background-removal algorithm; it is visually clean in this specific image but
   is not a reusable technique for arbitrary future source images.
+
+---
+
+## 5. V2 UPDATE — responsive/glow logo, resilient readiness gate, 16 KB investigation
+
+**Date:** 2026-09-17 (continuation, same day). **Builds on** the v1 work in §1–4 above (PR #7,
+merged at `730b949052ebf86a2891c71e9482aa5f392d3536`, plus PR #8's physical-device addendum) —
+this section documents what changed on top of that merged baseline, not a re-implementation.
+Superseded v1 evidence above (the small 148px logo, the plain `catchError`-swallowed restore
+failure, the un-investigated 16 KB warning) is left in place rather than deleted, per this task's
+instruction to preserve prior evidence and distinguish superseded state from the final one.
+**Branch:** `connect-splash-v2-resilience` (based on PR #8's branch, i.e. includes the §3 physical
+device addendum). **Codex branch reviewed:** `bin-connect-branded-splash` @
+`1372a292f70239f8ef3658c0cb384fab8f0b2341` — a parallel, independent implementation of the same
+brief. Not merged wholesale (explicitly instructed not to); several of its techniques were
+reviewed and selectively adapted where they were genuinely better than the v1 approach — credited
+inline below wherever adapted.
+
+### 5.1 Asset provenance reconciliation
+
+The Codex branch used a **different** wave background (`docs/evidence/splash_sources/Codex Image
+Sep 17, 2026, 07_34_45 AM.png`, 941×1672, used byte-identical — SHA-256
+`5331b200f0e02602ab08e536b45e52a9a5004e8799de5da93761c5bde5b207ff`) and a **different** logo
+derivation (an AI background-extraction edit of `image_8aa8647.jpg`, 1408×768 JPEG, into
+`binnacle_logo_transparent.png`, 1408×1117 RGBA — a generative cutout, not the same source as
+v1's logo despite matching canvas dimensions).
+
+**Resolution: v1's assets remain authoritative and are unchanged in this v2 update.** The user
+explicitly attached the two files used in v1 (`Codex Image Sep 17, 2026, 11_24_53 AM.png` for the
+logo, the `Firefly_Gemini Flash_...` image for the background) directly in this conversation with
+the literal instruction "use these images" — that is the most recent, explicit, in-conversation
+approval, postdating whatever separate request produced the Codex branch's asset choice. Per this
+task's own instruction ("use the latest explicitly approved asset"), v1's assets stand. The
+Codex branch's alternative assets are not deleted anywhere — they remain in git history on that
+branch, satisfying "preserve originals" without duplicating binaries into `main`.
+
+### 5.2 Implementation changes
+
+- **New file `flutter_app/lib/ui/widgets/connect_startup.dart`** replaces
+  `lib/ui/screens/splash_screen.dart` (deleted) and `main.dart`'s old `_AppStartup` class. Adapted
+  from the Codex branch's `ConnectStartup` architecture (name and the wrap-the-Navigator pattern
+  credited to that review — see below), rewritten with v1's assets, this task's own visual design,
+  and additional fixes found during testing (§5.5).
+- **`main.dart` now wraps the Navigator itself**, via `MaterialApp.builder`, instead of replacing
+  `home:` with a splash/shell switch:
+  ```dart
+  builder: (context, child) => ConnectStartup(
+    initialize: () => context.read<PairingService>().restore(),
+    child: child ?? const SizedBox.shrink(),
+  ),
+  home: const _RootShell(),
+  ```
+  This is the one deliberate architectural adoption from the Codex review: `_RootShell` (and any
+  route pushed onto it, including a future deep link) is now mounted from the very first frame,
+  sitting behind the splash overlay rather than not existing until the splash finishes. v1's
+  approach (swap `SplashScreen` → `_RootShell`) could not have preserved an in-flight route
+  arriving during startup; this can, and is now covered by a dedicated test (§5.4).
+- **Responsive, enlarged logo (requirement 1):** replaces the fixed `width: 148`. Computed via
+  `LayoutBuilder` inside a `SafeArea`:
+  ```dart
+  final logoWidth = math.min(300.0, math.min(constraints.maxWidth * 0.68, constraints.maxHeight * 0.34));
+  ```
+  bounded by both available width and height so it neither clips on a small/narrow phone nor
+  overruns a short landscape viewport — verified at three sizes in §5.4/§5.6. This roughly doubles
+  the effective on-screen size on a typical phone (e.g. ~280px on a 412-logical-px-wide portrait
+  screen) while remaining responsive, matching "approximately twice its current displayed size."
+- **Restrained glow layer (requirement 1):** a new `_GlowingLogo` widget composites two tinted,
+  blurred duplicates of the *same* logo asset behind the sharp, unmodified original — a thin
+  `sigmaX/Y: 2.5` "edge light" duplicate and a larger, softer `sigmaX/Y: 16` "diffuse halo"
+  duplicate, both tinted `BinnacleColors.tealBright` via `colorBlendMode: BlendMode.srcIn` (so the
+  glow traces the artwork's actual alpha silhouette — shield, needle, and the baked-in BINNACLE /
+  MARINE SYSTEMS lettering — not a generic rectangle). The original logo image itself is never
+  redrawn, recolored, or replaced; the glow is a separate rendering layer underneath it, per the
+  requirement. No pulsing or looping — the composite is static, matched to the rest of the
+  entrance's one-shot animation. Visually confirmed via the render-evidence screenshots (§5.6) and
+  on the real device in release mode (§5.7, `s25_release_splash_full.png`).
+- **Subtle fade into the destination (requirement 2):** the existing fade/scale entrance is
+  unchanged; the splash overlay now fades out (`AnimatedOpacity`, 450 ms) to reveal the
+  already-mounted destination underneath, rather than a hard widget swap.
+- **Concurrent real initialization, decode-time excluded from the 3.5 s floor (requirement 3):**
+  `PairingService.restore()` starts immediately in `initState()`, concurrently with brand-asset
+  precaching. The minimum-duration timer is started only inside a `WidgetsBinding.instance.
+  addPostFrameCallback` that runs after `precacheImage` has resolved for both assets — i.e. only
+  once decoded artwork has actually reached a frame — so asset-decode time is structurally
+  excluded from the "3.5 seconds visible" floor, not just excluded by convention. (Adapted from
+  the Codex branch's equivalent precache-then-time gating, which uses the same technique.)
+- **Visible retry on failure, credentials preserved (requirement 4):** replaces v1's
+  `restoreFuture.catchError((_) {})` (which silently swallowed a real restore failure) with a
+  `try/catch` around `initialize()` that shows a generic "Could not start Connect. Please try
+  again." message and a RETRY button — no exception detail is surfaced. Retrying simply re-invokes
+  `initialize()` (i.e. `PairingService.restore()` again); `restore()` only *reads* from secure
+  storage, so credentials already on-device are never touched, let alone cleared, by a failure or
+  a retry. Demo mode is unaffected — `AppConfig.isDemo` gating elsewhere is untouched.
+- **Navigation/lifecycle/Core-init preserved, reduced motion respected (requirement 5):** the real
+  `child` (i.e. `_RootShell` and everything under it) is mounted for `ConnectStartup`'s entire
+  lifetime inside a `Stack`, wrapped in `ExcludeSemantics` / `ExcludeFocus` / `IgnorePointer` (all
+  gated on `_finished`) rather than being swapped out — confirmed non-interactive during the
+  splash and fully interactive after, in a dedicated test (§5.4). `MediaQuery.disableAnimationsOf`
+  is checked both for the entrance animation (jumps straight to the end state) and the exit
+  transition (`Duration.zero`); the minimum-duration floor itself is **not** skipped by reduced
+  motion — only the visual motion is, matching "respect reduced-motion settings" without
+  compromising "at least 3.5 seconds of visible presentation."
+- **CONNECT text no longer uses GoogleFonts:** changed from `BinnacleTheme.mono()` (network-backed
+  JetBrains Mono) to a local `TextStyle(fontFamily: 'monospace', ...)`. This is a deliberate
+  reliability fix, not merely a testing workaround (see §5.5) — the splash is the app's most
+  latency-sensitive moment, before anything else has rendered, and must never depend on a font
+  network fetch succeeding. It is also what let this task's own render-evidence tests avoid the
+  same GoogleFonts/test-sandbox problem the Codex branch's evidence doc independently flagged
+  ("preventing unrelated Google Fonts network work from running inside image-decoding test
+  zones") — Codex's fix was to never use GoogleFonts for their splash text at all (`fontFamily:
+  'sans-serif'`); this task reaches the same conclusion independently and applies it directly to
+  the wordmark rather than working around it in test setup.
+- **`flutter_app/android/app/build.gradle.kts`:** see §5.3 (16 KB page-size investigation/fix).
+
+### 5.3 16 KB page-size compatibility — investigated, partially fixed
+
+Real investigation, not assumption, using `llvm-readelf -l` (from the installed NDK
+`28.2.13676358`) to inspect each bundled native library's actual ELF `LOAD` segment alignment
+(`p_align`) — the real cause of the on-device warning — as distinct from `zipalign -c -P 16`,
+which only checks zip-entry alignment and reported every library "OK" despite the real ELF
+misalignment underneath.
+
+**Findings, on the pre-fix debug build:**
+
+| Library | Source | `p_align` before | Genuinely misaligned? |
+|---|---|---|---|
+| `libbarhopper_v3.so` | `com.google.mlkit:barcode-scanning` / `play-services-mlkit-barcode-scanning`, via `mobile_scanner`'s hardcoded `17.2.0`/`18.3.0` | `0x1000` (4 KB) | **Yes** |
+| `libimage_processing_util_jni.so` | `androidx.camera:camera-core`, via `mobile_scanner`'s hardcoded `camera-camera2`/`camera-lifecycle:1.3.3` | `0x1000` (4 KB) | **Yes** |
+| `libflutter.so` | Flutter engine | `0x10000` (64 KB) | No — already aligned |
+| `libdartjni.so` | Flutter engine | `0x4000` (16 KB) | No — already aligned |
+| `libjingle_peerconnection_so.so` | `flutter_webrtc` | `0x4000` (16 KB) | No — already aligned |
+| `libVkLayer_khronos_validation.so` | Vulkan validation layer (debug-only) | `0x10000` (64 KB) | No — already aligned |
+
+The on-device dialog's "Unknown error" for the four already-aligned libraries is a false positive
+from the OS's debug-build compatibility checker, not a real defect — confirmed by direct ELF
+inspection, not assumed.
+
+**Fix applied** (`flutter_app/android/app/build.gradle.kts`, `configurations.all { resolutionStrategy
+{ force(...) } }`): forces `androidx.camera:camera-camera2`, `camera-lifecycle`, and `camera-core`
+to `1.4.2` (the version confirmed, via web search, to have fixed 16 KB alignment for CameraX —
+mobile_scanner 5.2.3's own `build.gradle` hardcodes the older, unaligned `1.3.3`). This is a
+Gradle-level dependency-resolution override only — no change to the `mobile_scanner` **Dart**
+package version or its public API, so no unrelated dependency churn. Rebuilt and re-inspected:
+
+| Library | `p_align` after fix |
+|---|---|
+| `libimage_processing_util_jni.so` | `0x4000` (16 KB) — **fixed** |
+| `libbarhopper_v3.so` | `0x1000` (4 KB) — **unchanged, not fixable here** |
+| `libsurface_util_jni.so` (new in CameraX 1.4.2) | `0x4000` (16 KB) — aligned |
+
+`libbarhopper_v3.so` (Google ML Kit's on-device barcode-scanning engine) remains genuinely
+unresolved upstream: confirmed via live web search that no 16 KB-aligned build of this specific
+native library exists yet, even at ML Kit's latest `17.3.0` (see
+[googlesamples/mlkit#989](https://github.com/googlesamples/mlkit/issues/989), "ML kit 17.3.0
+still not 16kb aligned with camerax 1.4.2", an open issue). This is left as a documented,
+unresolved upstream limitation rather than suppressed or silently omitted — there is no available
+fix to apply.
+
+**Debug vs. release, verified directly on the real device (not assumed):** the OS "Android App
+Compatibility" dialog (which explicitly states it "is showing because this is a debuggable app")
+appeared on a `flutter build apk --debug` install and did **not** appear anywhere in a full launch
+→ 3.5 s+ → transition → background/resume → rotation cycle on a `flutter build apk --release`
+install (same debug signing config, same device, same session) — see §5.7. The dialog is
+genuinely debug-build-specific; the underlying `libbarhopper_v3.so` misalignment itself is not
+debug-specific (it's baked into the AAR for both build types), it just isn't surfaced by this
+particular OS compatibility checker outside a debuggable build.
+
+`flutter test` (Dart-level) continues to pass 47/47 with this dependency force in place (§5.4);
+the mobile_scanner-dependent QR-pairing camera flow itself was not re-exercised at the native
+level in this session (no physical pairing/QR-scan walkthrough was performed) beyond confirming
+the app builds and the affected screens (Pairing) are unchanged.
+
+### 5.4 New/updated automated tests
+
+- **`flutter_app/test/startup_test.dart` (new, 10 tests)** — tests `ConnectStartup` directly and
+  in isolation (injectable `initialize`), adapting the Codex branch's test architecture/technique
+  (explicitly credited — this pattern, and the `RepaintBoundary`/`toImage()` render-evidence
+  capture below, are the two things adopted wholesale from that review since they were
+  unambiguously better than testing through the full `BinnacleConnectApp`):
+  - *Early-exit prevention:* a fast-succeeding `initialize()` still waits the full 3.5 s floor.
+  - *Slow readiness:* gated correctly past 5 s of a not-yet-resolved `initialize()`.
+  - *Failure/retry:* a thrown error shows the retry UI (not the exception text), tapping RETRY
+    re-invokes `initialize()`.
+  - *Interaction blocking:* the destination cannot be tapped during the splash, can be immediately
+    after.
+  - *Disposal:* tearing down the widget mid-`initialize()` cancels timers and doesn't throw when
+    the (now-orphaned) future later completes.
+  - *Reduced motion:* the entrance animation jumps to its end state, but the 3.5 s floor still
+    holds.
+  - *Route preservation:* a route pushed onto the wrapped `Navigator` while the splash is up
+    survives to become the visible screen once the splash clears, and `initialize()` is not
+    re-invoked by the navigation.
+  - *Responsive layout* at three sizes (412×917 tall-phone/S25-Ultra-like portrait, 360×640
+    compact portrait, 915×412 landscape): asserts no overflow/clipping exception, and (behind a
+    `SPLASH_EVIDENCE` dart-define, matching the Codex branch's technique) captures a real
+    `RenderRepaintBoundary.toImage()` render of the actual widget tree to
+    `docs/evidence/splash_{size}.png` — genuine rendered screenshots, not mockups, produced
+    entirely by `flutter test` without needing a device or browser.
+- **Two real bugs found and fixed while writing these tests** (both are genuine defects this
+  review process caught, not test-only workarounds):
+  1. A `late final AnimationController` field was only otherwise touched inside the normal
+     (non-test-skip) startup path. With the new `debugSkipForTesting` flag (below) shortcutting
+     straight to `_finished = true`, `dispose()` became the *first* access — lazily constructing
+     the controller (and its ticker, which looks up an ancestor) at a point where the element was
+     already deactivated, crashing with "Looking up a deactivated widget's ancestor is unsafe."
+     Fixed by forcing eager creation in `initState()` before the skip check.
+  2. `WidgetTester.pump(duration)` with one large single jump does not correctly advance a
+     `Ticker`-driven animation that was `forward()`-ed inside the immediately-preceding
+     `postFrameCallback` — a Ticker's first invocation sets its own start time on that callback,
+     so a single big pump right after sees `elapsed == 0` for the whole jump and the animation
+     appears frozen at its start value (only discoverable by inspecting an actual rendered
+     `toImage()` capture — presence-only assertions like `find.text(...)` never caught it). Fixed
+     in the test helper by pumping one extra 1 ms "priming" frame before any large-duration pump.
+     This is a test-harness-only concern; the real app's own continuous ~16 ms frame cadence never
+     hits it.
+- **`flutter_app/test/widget_test.dart` and `test/live_mode_test.dart`:** switched from awaiting
+  real splash timing (`warmConnectStartupAssets` + `runAsync` + a long fixed pump) to
+  `ConnectStartup.debugSkipForTesting = true` (a new static test-only flag, same idiom as
+  Flutter's own `debugDisableShadows` etc.) in `setUp()`, since these files test the rest of the
+  app, not the splash. This is simpler and avoids a real, separate problem found in the process:
+  a genuine `runAsync` gap (needed for real image decode) gives an unrelated, pre-existing, dormant
+  GoogleFonts network-fetch Future (from `BinnacleTheme.dark()`, used app-wide, not just by the
+  splash) its first-ever chance to actually run and fail loudly in this offline sandboxed test
+  runner — every other test never touches this because it never opens a real-async gap at all.
+  Skipping the splash for these tests avoids ever needing that gap. `live_mode_test.dart`
+  additionally needed one wait switched from `pumpAndSettle()` to a fixed-duration `pump()`: with
+  `ConnectStartup` now wrapping the Navigator from frame 1 (§5.2), the Core-mode Live screen's
+  permanently-pulsing "offline" indicator (`_PulsingDot(pulsing: status == LinkStatus.offline)`,
+  correctly perpetual by design — Core mode with no real Core is meant to show a persistent
+  offline state, not a transient "connecting" one) is alive from the very first frame in every
+  test now, and `pumpAndSettle()` never terminates against a genuinely perpetual animation.
+- **Result:** `flutter test` — 57/57 pass (47 pre-existing/adapted + 10 new), confirmed stable
+  across 4 consecutive full-suite runs, not a one-off pass. Core-mode
+  `test/live_mode_test.dart` — 1/1, confirmed stable across 3 runs.
+
+### 5.5 Automated verification (v2)
+
+- **`dart analyze`:** Pass — 0 errors, 0 warnings, the same 54 pre-existing `info`-level style
+  lints (none introduced).
+- **`flutter test` (default/demo mode):** Pass — 57/57, ×4 consecutive runs.
+- **Core-mode `flutter test test/live_mode_test.dart --dart-define=BINNACLE_APP_MODE=core
+  --dart-define=BINNACLE_CORE_URL=https://core.invalid`:** Pass — 1/1, ×3 consecutive runs.
+- **`tools/connect_audit/connect_audit.py flutter_app/lib`:** Pass — "No findings".
+- **`flutter build web`** (demo mode and core mode): both Pass.
+- **`flutter build apk --debug`:** Pass.
+- **`flutter build apk --release`:** Pass (110.3 MB; debug-signed, per the established
+  `signingConfigs.getByName("debug")` convention already in `build.gradle.kts` — this is
+  explicitly **not** a production-signed release; see §5.7).
+
+### 5.6 Render-evidence screenshots (real `flutter test` renders, not mockups)
+
+Produced by `flutter test test/startup_test.dart --dart-define=SPLASH_EVIDENCE=true`, which also
+loads a real bundled font (the Flutter SDK's own cached `roboto-medium.ttf`) under the
+`'monospace'` family name for this evidence run only — widget tests otherwise substitute a
+placeholder box-glyph font for all text, which would make "CONNECT" render as blank boxes in the
+captured PNGs despite rendering correctly on a real device (confirmed separately in §5.7).
+
+- [`docs/evidence/splash_412x917.png`](splash_412x917.png) — tall-phone/S25-Ultra-like portrait.
+  Logo and glow clearly visible, CONNECT legible, centered, no clipping.
+- [`docs/evidence/splash_360x640.png`](splash_360x640.png) — compact phone portrait. Logo scales
+  down appropriately, still fully visible and centered.
+- [`docs/evidence/splash_915x412.png`](splash_915x412.png) — landscape. Logo shrinks further
+  (height-constrained, as intended for "intentional landscape handling") while remaining centered
+  with no clipping.
+
+No emulator or physical device was used for these three — they are exactly what `flutter test`
+rendered, exported at 2× pixel ratio via `RenderRepaintBoundary.toImage()`.
+
+### 5.7 Physical device re-verification (S25 Ultra, this v2 build)
+
+Same device as §3 (`SM S938U`, serial `R5CY13C57LT`), still connected. Installed as an upgrade
+over the v1 build already on-device (`versionCode 2002`) — **not** uninstalled, cleared, or
+re-signed under a different identity.
+
+- **Debug build:** `flutter build apk --debug --build-number=2003` (after the 16 KB Gradle fix,
+  before the release build below) — SHA-256
+  `a01689638687de07097a5dc08e227fec2527458f99af33d3880b860159a0fcf4`. Installed via `adb install
+  -r` (accepted — build number above the installed 2002, no downgrade error, no signing conflict).
+- **Release build (debug-signed):** `flutter build apk --release --build-number=2004` — SHA-256
+  `25faf9b9f03df37e90d5f24217a7bbf4e3165cc1784ed63c785ac04298bae13a`, 110.3 MB. **This uses the
+  same `signingConfigs.getByName("debug")` config already established in
+  `build.gradle.kts`** (per the task's own instruction to use the established compatible signing
+  configuration) — it is a **debug-signed release-mode build**, explicitly **not** a
+  production-signed release. Installed via `adb install -r` over the debug build above —
+  accepted (same signing certificate, build number `2004 > 2003`, no reinstall/data-loss). Both
+  APKs verified installed via `dumpsys package` reporting the matching `versionCode` after each
+  install; app data/pairing state preserved throughout (upgrade installs only, `-r`, never
+  uninstalled).
+- **Cold launch, release build:** `am force-stop` then `am start` — process alive
+  (`pidof`), confirmed via `dumpsys package` reporting `versionCode=2004`.
+- **Unobstructed splash confirmed:** screenshots at ~0.5 s
+  ([`s25_release_splash_launch.png`](s25_release_splash_launch.png)) and after the animation
+  settles ([`s25_release_splash_full.png`](s25_release_splash_full.png)) show the enlarged,
+  glowing logo and legible "CONNECT" wordmark rendering cleanly against the real system status
+  bar, with **no compatibility dialog** — direct visual confirmation of the debug-vs-release
+  finding in §5.3, not an inference from the dialog's own wording.
+- **Transition and normal destination:** a screenshot ~3 s after launch
+  ([`s25_release_after_transition.png`](s25_release_after_transition.png)) shows the app already
+  on "My Boat" with the correct "Demo mode — nothing above is a real connection" banner — the
+  splash cleared and the app reached its normal destination in demo/offline mode as expected.
+- **Background/resume:** `KEYCODE_HOME` then `am start` again — same PID before and after
+  (`9783`), confirming the existing task was resumed, not restarted.
+- **Orientation:** rotated to landscape via `adb shell settings put system user_rotation 1` —
+  [`s25_landscape.png`](s25_landscape.png) shows My Boat rendering correctly in landscape, no
+  crash; rotation setting restored afterward.
+- **Crash/ANR logs:** `adb logcat -d --pid=<pid> | grep -iE "FATAL|AndroidRuntime|ANR|Exception"`
+  — no matches, across the entire launch → transition → background/resume → rotation sequence.
+- **Not performed in this session:** a real QR-pairing camera walkthrough (to directly exercise
+  the `mobile_scanner`-dependent code path affected by the CameraX version force in §5.3) and a
+  timed stopwatch re-measurement of the 3.5 s floor against a physical clock (the screenshots
+  above are timestamped by `adb`'s capture time, which is sufficient to confirm the sequence but
+  not a frame-accurate re-measurement).
+
+### 5.8 Remaining limitations (v2)
+
+- `libbarhopper_v3.so` (Google ML Kit barcode-scanning) remains genuinely 16 KB-misaligned —
+  unresolved upstream, no fix available as of this investigation (§5.3).
+- The `mobile_scanner`-dependent QR-pairing flow was not re-exercised on-device at the native
+  level after the CameraX `1.4.2` force; only confirmed to build and that the Pairing screen
+  itself is otherwise unchanged.
+- No production-signed release build exists or was tested — only the established debug-signed
+  release-mode configuration, per instruction.
+- The 3.5 s floor and transition were confirmed via timestamped screenshots and the automated
+  test suite's fake-clock assertions, not a physical stopwatch against the device.
