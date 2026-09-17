@@ -12,6 +12,12 @@ class MobAlertBanner extends StatelessWidget {
   final double? headingDegrees;
   final VoidCallback onAcknowledge;
 
+  /// True only for a demo-mode simulated event (BIN-9) — renders a
+  /// "SIMULATED" tag so it can never be mistaken for a real Core-reported
+  /// alert, and switches the acknowledge button's label since demo mode is
+  /// the only case where acknowledging is guaranteed to save a clip locally.
+  final bool simulated;
+
   const MobAlertBanner({
     super.key,
     required this.active,
@@ -19,6 +25,7 @@ class MobAlertBanner extends StatelessWidget {
     this.lon,
     this.headingDegrees,
     required this.onAcknowledge,
+    this.simulated = false,
   });
 
   @override
@@ -55,6 +62,18 @@ class MobAlertBanner extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text('MAN OVERBOARD ALERT',
                       style: BinnacleTheme.mono(size: 13, color: Colors.white, weight: FontWeight.w700)),
+                  if (simulated) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.white70),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('SIMULATED',
+                          style: BinnacleTheme.mono(size: 9, color: Colors.white70, weight: FontWeight.w700)),
+                    ),
+                  ],
                 ]),
                 const SizedBox(height: 10),
                 if (headingDegrees != null)
@@ -66,6 +85,11 @@ class MobAlertBanner extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text('POS $lat, $lon', style: BinnacleTheme.mono(size: 11, color: Colors.white)),
+                  )
+                else if (active)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text('Position not reported', style: TextStyle(color: Colors.white70, fontSize: 11)),
                   ),
                 const SizedBox(height: 12),
                 SizedBox(
@@ -74,7 +98,11 @@ class MobAlertBanner extends StatelessWidget {
                     onPressed: onAcknowledge,
                     style:
                         ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: BinnacleColors.orange),
-                    child: const Text('Acknowledge — clip saved'),
+                    // Only demo mode is guaranteed to save a clip locally
+                    // (see capture_screen.dart) — a real Core-mode
+                    // acknowledgment must not promise media that Core's own
+                    // pipeline, not this button, is responsible for.
+                    child: Text(simulated ? 'Acknowledge — clip saved' : 'Acknowledge'),
                   ),
                 ),
               ],

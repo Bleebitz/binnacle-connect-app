@@ -60,7 +60,20 @@ class ControlChannelService extends ChangeNotifier {
   DeviceCredential? _attachedCredential;
 
   final bool demo;
-  ControlChannelService({bool? demo}) : demo = demo ?? AppConfig.isDemo {
+
+  // Injectable purely so BIN-9's stale/disconnected tests don't have to
+  // wait out the real 15s/45s thresholds — production code never passes
+  // these, so the real timing is exactly what main.dart gets by default.
+  final Duration _staleAfter;
+  final Duration _offlineAfter;
+
+  ControlChannelService({
+    bool? demo,
+    Duration staleAfter = const Duration(seconds: 15),
+    Duration offlineAfter = const Duration(seconds: 45),
+  })  : demo = demo ?? AppConfig.isDemo,
+        _staleAfter = staleAfter,
+        _offlineAfter = offlineAfter {
     status = this.demo ? LinkStatus.simulated : LinkStatus.offline;
     state = this.demo ? VesselState.simulated() : VesselState.fromJson({});
   }
@@ -69,6 +82,18 @@ class ControlChannelService extends ChangeNotifier {
   bool get hasCurrentState => demo || status == LinkStatus.connected;
   final Map<String, Completer<CommandResult>> _results = {};
   final Map<String, Timer> _resultTimers = {};
+
+  // BIN-9: distinguishing "never connected" from "was connected, now
+  // offline/stale" and from "confirmed recording, then lost the link"
+  // requires remembering facts across a disconnect — [state] alone resets
+  // to defaults on construction and is silently overwritten going forward,
+  // so it cannot answer "did we ever hear from Core" or "what was the last
+  // thing Core told us about recording" once the link drops. These two
+  // fields are the only local memory this service keeps beyond the current
+  // [state]; both are pure observations of what Core has said, never
+  // inferred or assumed.
+  bool everConnected = false;
+  bool? lastKnownRecording;
 
   // WebRTC signaling — reuses this authenticated socket rather than opening
   // a second connection. See webrtc_service.dart's RtcVideoRenderer for the
@@ -89,8 +114,8 @@ class ControlChannelService extends ChangeNotifier {
   }
 
   Future<CommandResult> sendConfirmed(String command, Map<String, dynamic> params,
-      {Duration timeout = const Duration(seconds: 5)}) {
-    final id = sendCommand(command, params);
+      {Duration timeout = const Duration(seconds: 5), String? actor}) {
+    final id = sendCommand(command, params, actor: actor);
     final result = Completer<CommandResult>();
     _results[id] = result;
     _resultTimers[id] = Timer(timeout,
@@ -126,6 +151,12 @@ class ControlChannelService extends ChangeNotifier {
       _closeTransport();
       status = LinkStatus.offline;
       _retryAttempt = 0;
+      // A different (or removed) credential means a different logical
+      // session — "we were connected" and "recording was confirmed" are
+      // facts about the PREVIOUS device/pairing and must not carry over to
+      // whatever this credential connects to next.
+      everConnected = false;
+      lastKnownRecording = null;
     }
   }
 
@@ -263,6 +294,8 @@ class ControlChannelService extends ChangeNotifier {
         _retryAttempt = 0;
         manualFramingFlagged = state.framing.isManual;
         lastSeen = DateTime.now();
+        everConnected = true;
+        lastKnownRecording = state.capture.recording;
         _setStatus(LinkStatus.connected);
       } else if (topic == 'ack') {
         final id = j['payload']['id'] as String?;
@@ -304,9 +337,9 @@ class ControlChannelService extends ChangeNotifier {
     // Per §1.1 / §4.3: the Core keeps recording regardless — the UI must say
     // so, never imply capture stopped.
     final silentFor = now.difference(lastSeen);
-    if (status == LinkStatus.connected && silentFor > const Duration(seconds: 15)) {
+    if (status == LinkStatus.connected && silentFor > _staleAfter) {
       _setStatus(LinkStatus.stale);
-    } else if (status == LinkStatus.stale && silentFor > const Duration(seconds: 45)) {
+    } else if (status == LinkStatus.stale && silentFor > _offlineAfter) {
       _lostConnection(_generation);
     }
     if (timedOut.isNotEmpty) notifyListeners();
@@ -380,7 +413,13 @@ class ControlChannelService extends ChangeNotifier {
   void setControlMode(String mode, {String? actor}) =>
       sendCommand('set_control_mode', {'mode': mode}, actor: actor);
 
-  void acknowledgeMob({String? actor}) => sendCommand('acknowledge_mob', {}, actor: actor);
+  /// Unlike arm/disarm/etc above, this MUST be confirmed, not fire-and-
+  /// forget (BIN-9): the MOB banner is not allowed to clear just because a
+  /// command was dispatched — only an actual Core acknowledgment (or a
+  /// later state update reporting the event inactive) may confirm it. See
+  /// MobAlertState and capture_screen.dart's acknowledge handler.
+  Future<CommandResult> acknowledgeMob({String? actor, Duration timeout = const Duration(seconds: 5)}) =>
+      sendConfirmed('acknowledge_mob', {}, actor: actor, timeout: timeout);
 
   /// Broadcast. mode "boat" is crew-allowed; mode "public" is OWNER ONLY —
   /// this single restriction is what closes the exposure identified in
