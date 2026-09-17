@@ -330,14 +330,20 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(height: 12),
                   _SafetyCard(safety: state.safety),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => mobAlert.active ? mobAlert.acknowledge() : mobAlert.trigger(),
-                      icon: const Icon(Icons.warning_amber_rounded),
-                      label: const Text('Simulate fall alert (demo)'),
+                  // Demo-only: a Core-mode build must never let a local tap
+                  // fabricate a man-overboard alert — MobAlertState.trigger()
+                  // is a bare local boolean, not something the Core
+                  // confirmed (see BIN-9's evidence). This affordance is
+                  // strictly for exercising MobAlertBanner without hardware.
+                  if (AppConfig.isDemo)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => mobAlert.active ? mobAlert.acknowledge() : mobAlert.trigger(),
+                        icon: const Icon(Icons.warning_amber_rounded),
+                        label: const Text('Simulate fall alert (demo)'),
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),

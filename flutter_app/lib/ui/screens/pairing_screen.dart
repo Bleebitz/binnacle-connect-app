@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_config.dart';
 import '../../core/services/pairing_service.dart';
 import '../../core/models/credential.dart';
 import '../theme/binnacle_theme.dart';
@@ -270,33 +271,42 @@ class _PairingScreenState extends State<PairingScreen> {
                 child: Text(_error!, style: const TextStyle(color: BinnacleColors.orange, fontSize: 12.5)),
               ),
             ],
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 10),
-            Text(
-              'DEMO ONLY — no real Core exists in this scaffold to pair with. '
-              'This button fabricates a successful pairing so the unclaimed-'
-              'unit warning flow can actually be exercised.',
-              style: BinnacleTheme.mono(size: 9.5, color: BinnacleColors.slateDim),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _busy
-                  ? null
-                  : () async {
-                      setState(() => _busy = true);
-                      final result = await context.read<PairingService>().debugSimulatePairing(
-                            unclaimed: true,
-                            role: DeviceRole.owner,
-                          );
-                      if (!mounted) return;
-                      setState(() => _busy = false);
-                      if (result.unitWasUnclaimed) {
-                        await _showUnclaimedWarning(result.credential!);
-                      }
-                    },
-              child: const Text('Simulate pairing to an unclaimed unit'),
-            ),
+            // AppConfig.isDemo-gated: debugSimulatePairing() itself throws
+            // StateError outside demo mode (see pairing_service.dart), but
+            // this widget must not even render the affordance in a Core
+            // build — an unguarded button here previously meant a real
+            // (non-demo) build shipped a control that either crashes on tap
+            // or, if the service guard were ever relaxed, would fabricate a
+            // pairing credential outside the scaffold this exists for.
+            if (AppConfig.isDemo) ...[
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 10),
+              Text(
+                'DEMO ONLY — no real Core exists in this scaffold to pair with. '
+                'This button fabricates a successful pairing so the unclaimed-'
+                'unit warning flow can actually be exercised.',
+                style: BinnacleTheme.mono(size: 9.5, color: BinnacleColors.slateDim),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        setState(() => _busy = true);
+                        final result = await context.read<PairingService>().debugSimulatePairing(
+                              unclaimed: true,
+                              role: DeviceRole.owner,
+                            );
+                        if (!mounted) return;
+                        setState(() => _busy = false);
+                        if (result.unitWasUnclaimed) {
+                          await _showUnclaimedWarning(result.credential!);
+                        }
+                      },
+                child: const Text('Simulate pairing to an unclaimed unit'),
+              ),
+            ],
           ],
         ),
       ),
