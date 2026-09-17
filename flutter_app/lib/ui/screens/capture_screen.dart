@@ -77,33 +77,17 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   /// A spectator's allowed command set is empty by design (§3) — every
   /// command throws CommandRejected until this device is paired as crew or
-  /// owner. In demo mode (no real Core to ever accept anything) that would
-  /// make every button a dead end, so callers are expected to treat a demo-
-  /// mode rejection as "proceed anyway" — see [_completeIfSent]. In core
-  /// mode a rejection is real and must NOT be papered over: returning
-  /// whether the command actually sent, instead of swallowing the outcome
-  /// entirely, is what lets callers tell the difference.
+  /// owner. This is used for fire-and-forget UI actions (zoom, presets,
+  /// trigger mode, arm/disarm) where there is nothing further to confirm;
+  /// actions with a real outcome to wait on (capture, MOB acknowledge) go
+  /// through sendConfirmed directly instead — see [_capture]/
+  /// [_acknowledgeMob] — rather than swallowing the outcome here.
   static bool _send(void Function() action) {
     try {
       action();
       return true;
     } on CommandRejected {
       return false;
-    }
-  }
-
-  /// Gates a "the thing happened" side effect (creating a clip, dismissing
-  /// the MOB banner, ...) on whether the command actually succeeded — except
-  /// in demo mode, where nothing is real anyway and the whole point is a
-  /// usable demo regardless of role/pairing state. In core mode, a rejected
-  /// command shows [failureMessage] and leaves state exactly as it was: the
-  /// app must never claim a save/acknowledge happened that the Core didn't
-  /// actually confirm.
-  void _completeIfSent(bool sent, {required VoidCallback onSuccess, required String failureMessage}) {
-    if (sent || AppConfig.isDemo) {
-      onSuccess();
-    } else {
-      _showSaveToast(failureMessage, isError: true);
     }
   }
 
@@ -130,6 +114,38 @@ class _CaptureScreenState extends State<CaptureScreen> {
       }
     } on CommandRejected {
       if (mounted) _showSaveToast('Capture unavailable — check pairing and Core link', isError: true);
+    }
+  }
+
+  /// BIN-9: the banner must not clear on a button press. Demo mode has no
+  /// Core to confirm against, so its local "Acknowledge" tap clears
+  /// immediately by design and fabricates a demo fall clip, matching the
+  /// existing demo capture flow. Core mode clears ONLY after
+  /// ControlChannelService.acknowledgeMob() actually resolves to
+  /// [CommandOutcome.acknowledged] — and does not fabricate a clip locally,
+  /// since a real "fall" highlight only ever exists once the Core media
+  /// catalog reports it (see ClipRepository.addFromCapture, which throws
+  /// outside demo mode for exactly this reason). If Core's own next state
+  /// update still reports the event active, MobAlertState.applyCoreEvent
+  /// re-asserts it — Core remains the final authority regardless of what
+  /// this button does locally.
+  Future<void> _acknowledgeMob(ControlChannelService control, MobAlertState mobAlert) async {
+    if (AppConfig.isDemo) {
+      context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
+      mobAlert.acknowledgeLocally();
+      return;
+    }
+    if (control.isPending('acknowledge_mob')) return;
+    try {
+      final result = await control.acknowledgeMob(actor: 'levi');
+      if (!mounted) return;
+      if (result.outcome == CommandOutcome.acknowledged) {
+        mobAlert.acknowledgeLocally();
+      } else {
+        _showSaveToast('Acknowledge not confirmed: ${result.outcome.name}', isError: true);
+      }
+    } on CommandRejected {
+      if (mounted) _showSaveToast('Acknowledge unavailable — check pairing and Core link', isError: true);
     }
   }
 
@@ -171,7 +187,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
               },
             ),
             const SizedBox(height: 2),
-            _LinkBar(status: control.status, lastSeen: control.lastSeen, seq: state.seq),
+            _LinkBar(
+              status: control.status,
+              lastSeen: control.lastSeen,
+              seq: state.seq,
+              everConnected: control.everConnected,
+              lastKnownRecording: control.lastKnownRecording,
+            ),
             AnimatedSize(
               duration: const Duration(milliseconds: 250),
               curve: Curves.easeOut,
@@ -288,24 +310,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     Positioned.fill(
                       child: MobAlertBanner(
                         active: mobAlert.active,
-                        lat: '36.02083° N',
-                        lon: '114.74215° W',
-                        headingDegrees: 128,
-                        onAcknowledge: () {
-                          // "Alerts reflect Core state, not locally invented
-                          // state" — a real MOB alert is Core-authoritative,
-                          // so a rejected acknowledge must NOT clear the
-                          // local banner or fabricate a clip.
-                          final sent = _send(() => control.acknowledgeMob(actor: 'levi'));
-                          _completeIfSent(
-                            sent,
-                            failureMessage: 'Acknowledge failed — command rejected',
-                            onSuccess: () {
-                              context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
-                              mobAlert.acknowledge();
-                            },
-                          );
-                        },
+                        lat: mobAlert.lat,
+                        lon: mobAlert.lon,
+                        headingDegrees: mobAlert.headingDegrees,
+                        simulated: mobAlert.simulated,
+                        onAcknowledge: () => _acknowledgeMob(control, mobAlert),
                       ),
                     ),
                   ],
@@ -329,15 +338,23 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   _ArmSwitchRow(control: control, capture: state.capture),
                   const SizedBox(height: 12),
                   _SafetyCard(safety: state.safety),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => mobAlert.active ? mobAlert.acknowledge() : mobAlert.trigger(),
-                      icon: const Icon(Icons.warning_amber_rounded),
-                      label: const Text('Simulate fall alert (demo)'),
+                  // Demo-only: a Core-mode build must never let a local tap
+                  // fabricate a man-overboard alert — MobAlertState in Core
+                  // mode only ever reflects what Core reported (see
+                  // mob_alert_state.dart), and triggerDemo() itself throws
+                  // outside demo mode as a second layer of defense.
+                  if (AppConfig.isDemo) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () =>
+                            mobAlert.active ? mobAlert.acknowledgeLocally() : mobAlert.triggerDemo(),
+                        icon: const Icon(Icons.warning_amber_rounded),
+                        label: const Text('Simulate fall alert (demo)'),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -451,7 +468,35 @@ class _LinkBar extends StatelessWidget {
   final LinkStatus status;
   final DateTime lastSeen;
   final int seq;
-  const _LinkBar({required this.status, required this.lastSeen, required this.seq});
+
+  /// Whether this ControlChannelService has EVER received a real state
+  /// message this session (BIN-9) — distinguishes "never connected" from
+  /// "was connected, now offline," which the status enum alone cannot.
+  final bool everConnected;
+
+  /// The last Core-reported recording flag, or null if Core has never told
+  /// us either way. Never assume recording from a stale connection alone.
+  final bool? lastKnownRecording;
+
+  const _LinkBar({
+    required this.status,
+    required this.lastSeen,
+    required this.seq,
+    required this.everConnected,
+    required this.lastKnownRecording,
+  });
+
+  /// The subtitle for stale/offline: what we actually know about recording
+  /// as of the last real contact, never a claim about the current instant.
+  /// Per §1.1/§4.3 the Core keeps recording regardless of this link — but
+  /// that autonomy claim is only honest to make once a state message
+  /// actually confirmed recording was happening; absent that, the honest
+  /// answer is "we never confirmed," not "still recording."
+  String _lastKnownLine() => switch (lastKnownRecording) {
+        true => 'Vision was recording as of ${_ago(lastSeen)} — Core continues autonomously without this link',
+        false => 'Not recording as of ${_ago(lastSeen)}',
+        null => 'Recording was never confirmed before the link dropped',
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -477,16 +522,26 @@ class _LinkBar extends StatelessWidget {
           BinnacleColors.teal.withValues(alpha: 0.45),
           BinnacleColors.navy,
         ),
+      // Stale = still officially "connected" but silent past the freshness
+      // window — a last-known state, not a fresh one, and not yet a
+      // disconnect either.
       LinkStatus.stale => (
           'Not responding',
-          'Last seen ${_ago(lastSeen)}',
+          _lastKnownLine(),
           BinnacleColors.amber,
           BinnacleColors.amber,
           BinnacleColors.amber.withValues(alpha: 0.07),
         ),
+      LinkStatus.offline when !everConnected => (
+          'Never connected',
+          'No state received yet this session',
+          BinnacleColors.orange,
+          BinnacleColors.orange,
+          BinnacleColors.orange.withValues(alpha: 0.08),
+        ),
       LinkStatus.offline => (
-          'Offline — still recording',
-          'Vision keeps capturing without the link',
+          'Offline',
+          _lastKnownLine(),
           BinnacleColors.orange,
           BinnacleColors.orange,
           BinnacleColors.orange.withValues(alpha: 0.08),
@@ -1068,6 +1123,26 @@ class _SafetyCard extends StatelessWidget {
   final SafetyState safety;
   const _SafetyCard({required this.safety});
 
+  static (Color, Color) _readinessColors(SafetyReadiness r) => switch (r) {
+        SafetyReadiness.operational => (BinnacleColors.tealBright, BinnacleColors.tealBright),
+        SafetyReadiness.degraded => (BinnacleColors.amber, BinnacleColors.amber),
+        SafetyReadiness.faulted => (BinnacleColors.orange, BinnacleColors.orange),
+        SafetyReadiness.unknown => (BinnacleColors.slate, BinnacleColors.slateDim),
+      };
+
+  Widget _readinessBadge(SafetyReadiness r) {
+    final (fg, border) = _readinessColors(r);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: fg.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border.withValues(alpha: 0.4)),
+      ),
+      child: Text(r.label, style: BinnacleTheme.mono(size: 8.5, color: fg)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1081,6 +1156,10 @@ class _SafetyCard extends StatelessWidget {
             const SizedBox(width: 8),
             Text('Safety', style: Theme.of(context).textTheme.titleMedium),
             const Spacer(),
+            // LOCKED is the non-disableable POLICY (always true, by design —
+            // see SafetyState's class doc). It is deliberately never driven
+            // by readiness below: a faulted sensor doesn't unlock the
+            // policy, it just means the badges beneath say so honestly.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
@@ -1096,6 +1175,19 @@ class _SafetyCard extends StatelessWidget {
             'No disable command exists in the control protocol.',
             style: TextStyle(color: BinnacleColors.slate, fontSize: 11.5),
           ),
+          const SizedBox(height: 10),
+          // Readiness is the SEPARATE, authoritative question of whether the
+          // service is actually working right now, per Core — unknown
+          // whenever Core hasn't reported it, never assumed operational.
+          Row(children: [
+            const Text('Fall detection', style: TextStyle(fontSize: 11)),
+            const SizedBox(width: 6),
+            _readinessBadge(safety.fallDetectionReadiness),
+            const SizedBox(width: 14),
+            const Text('MOB alert', style: TextStyle(fontSize: 11)),
+            const SizedBox(width: 6),
+            _readinessBadge(safety.mobAlertReadiness),
+          ]),
         ],
       ),
     );
