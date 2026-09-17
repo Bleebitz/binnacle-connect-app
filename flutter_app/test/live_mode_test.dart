@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'startup_test.dart' show warmBranding;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:binnacle_connect/main.dart';
@@ -11,8 +13,13 @@ import 'package:binnacle_connect/ui/widgets/simulated_wake_view.dart';
 
 void main() {
   testWidgets('Live mode contains no demo media or simulated video', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
     final context = tester.element(find.text('My Boat').first);
     final clips = context.read<ClipRepository>();
     expect(clips.clips, isEmpty);

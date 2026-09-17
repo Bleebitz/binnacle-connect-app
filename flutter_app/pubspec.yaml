@@ -33,6 +33,8 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/branding/connect_splash_background.png
+    - assets/branding/binnacle_logo_transparent.png
     # Real GoPro development footage (VER-01), bundled so demo mode has a
     # genuinely playable Library clip instead of a dead mediaUrl — see
     # library_screen.dart's seedDemo(). Clearly a demo asset, never

@@ -20,6 +20,7 @@ import 'core/models/wake_entry.dart'; // WakeRepository — no longer re-exporte
 import 'ui/screens/my_boat_screen.dart';
 import 'ui/screens/session_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
+import 'ui/widgets/connect_startup.dart';
 
 void main() {
   // Core mode with no URL is a broken deploy, not a reason to quietly act
@@ -77,7 +78,7 @@ class BinnacleConnectApp extends StatelessWidget {
         // PairingService must exist before ControlChannelService connects,
         // since the credential it holds is what gets attached to the socket.
         // See Connect_Device_Pairing_and_Authorization_Design_v0.1.
-        ChangeNotifierProvider(create: (_) => PairingService()..restore()),
+        ChangeNotifierProvider(create: (_) => PairingService()),
 
         // ProxyProvider so ControlChannelService always has the current
         // PairingService attached, including if pairing state changes after
@@ -146,6 +147,10 @@ class BinnacleConnectApp extends StatelessWidget {
         title: 'Binnacle Connect',
         debugShowCheckedModeBanner: false,
         theme: BinnacleTheme.dark(),
+        builder: (context, child) => ConnectStartup(
+          initialize: () => context.read<PairingService>().restore(),
+          child: child ?? const SizedBox.shrink(),
+        ),
         home: const _RootShell(),
       ),
     );

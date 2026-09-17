@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ owns this short pre-Flutter window. The branded artwork
+         and the full 3.5-second minimum are handled by ConnectStartup. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@color/connect_startup_navy</item>
+        <item name="android:windowSplashScreenBackground">@color/connect_startup_navy</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/startup_empty</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/connect_startup_navy</item>
+        <item name="android:navigationBarColor">@color/connect_startup_navy</item>
+    </style>
+</resources>

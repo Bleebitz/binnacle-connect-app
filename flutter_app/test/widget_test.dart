@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:binnacle_connect/main.dart';
+import 'startup_test.dart' show warmBranding;
 
 void main() {
   setUp(() {
@@ -26,8 +27,12 @@ void main() {
 
   testWidgets('App launches, renders the BIN-32 nav, and starts on My Boat',
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
 
     // The reorganized nav — My Boat / Live / Session / Library / Community
     // — replaces Capture / Library / Crew / Compete / Settings. Crew and
@@ -46,8 +51,12 @@ void main() {
 
   testWidgets("My Boat's profile icon reaches Settings (no longer a bottom-nav tab)",
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
 
     await tester.tap(find.byTooltip('Settings & account'));
     await tester.pumpAndSettle();
@@ -57,8 +66,12 @@ void main() {
 
   testWidgets('Live tab shows the simulated capture screen and link badge',
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
 
     await tester.tap(find.text('Live').last);
     await tester.pumpAndSettle();
@@ -71,8 +84,12 @@ void main() {
 
   testWidgets('Community > Compete opens the hub, King of Wake speed-class validation works live',
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
 
     await tester.tap(find.text('Community').last);
     await tester.pumpAndSettle();
@@ -116,8 +133,12 @@ void main() {
 
   testWidgets('Top Tricks submit button reacts to typing (regression test for a real bug)',
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('Community').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Compete'));
@@ -145,8 +166,12 @@ void main() {
 
   testWidgets('Best Falls submits from real footage, not a self-ticked checkbox',
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('Community').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Compete'));
@@ -177,8 +202,12 @@ void main() {
 
   testWidgets('Riders aggregates points across King of Wake, Top Tricks, and Best Falls',
       (WidgetTester tester) async {
+    await warmBranding(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3500));
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('Community').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Compete'));
