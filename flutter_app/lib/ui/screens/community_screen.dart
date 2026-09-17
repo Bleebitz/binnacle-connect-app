@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/app_config.dart';
 import 'package:provider/provider.dart';
+import '../widgets/binnacle_background.dart';
 import 'crew_screen.dart';
 import 'compete_hub_screen.dart';
 
@@ -19,22 +20,38 @@ class CommunityScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!AppConfig.isDemo) {
-      return Scaffold(appBar: AppBar(title: const Text('Community')),
-        body: const Center(child: Text('Community and Compete preview remains available in Demo.\n'
-            'Live integration follows the Core ride experience.')));
+      return BinnacleBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              title: const Text('Community')),
+          body: const Center(
+              child: Text(
+                  'Community and Compete preview remains available in Demo.\n'
+                  'Live integration follows the Core ride experience.')),
+        ),
+      );
     }
     final crewRepo = context.watch<CrewRepository>();
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Community'),
-          bottom: const TabBar(tabs: [Tab(text: 'Crew'), Tab(text: 'Compete')]),
+    return BinnacleBackground(
+      child: DefaultTabController(
+        length: 2,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            title: const Text('Community'),
+            bottom:
+                const TabBar(tabs: [Tab(text: 'Crew'), Tab(text: 'Compete')]),
+          ),
+          body: TabBarView(children: [
+            CrewScreen(repository: crewRepo),
+            const CompeteScreen(),
+          ]),
         ),
-        body: TabBarView(children: [
-          CrewScreen(repository: crewRepo),
-          const CompeteScreen(),
-        ]),
       ),
     );
   }

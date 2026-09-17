@@ -6,6 +6,7 @@ import '../../core/models/vessel_state.dart';
 import '../../core/services/control_channel_service.dart';
 import '../../core/services/pairing_service.dart';
 import '../theme/binnacle_theme.dart';
+import '../widgets/binnacle_background.dart';
 import 'crew_screen.dart';
 import 'pairing_screen.dart';
 import 'settings_screen.dart';
@@ -33,89 +34,106 @@ class MyBoatScreen extends StatelessWidget {
     final crew = context.watch<CrewRepository>();
     final state = control.state;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('My Boat'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_outline),
-            tooltip: 'Settings & account',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _StatusCard(
-            icon: Icons.link,
-            title: 'Binnacle connected',
-            statusLine: _connectionLine(control.status),
-            accent: _connectionColor(control.status),
-          ),
-          const SizedBox(height: 10),
-          _StatusCard(
-            icon: Icons.videocam_outlined,
-            title: 'Vision online',
-            // Vision's own liveness isn't modeled separately from the
-            // control-channel link yet — they're the same signal here
-            // honestly, not two independent checks dressed up as two.
-            statusLine: 'Vision readiness not reported',
-            accent: BinnacleColors.slate,
-          ),
-          const SizedBox(height: 10),
-          _StatusCard(
-            icon: Icons.gps_fixed,
-            title: 'Track ready',
-            statusLine: 'Track readiness not reported',
-            accent: BinnacleColors.slate,
-          ),
-          const SizedBox(height: 10),
-          _StatusCard(
-            icon: state.capture.recording ? Icons.fiber_manual_record : Icons.circle_outlined,
-            title: !control.hasCurrentState ? 'Recording state unknown' : state.capture.recording ? 'Recording — pass ${state.capture.passNumber}' : 'Not recording',
-            statusLine: !control.hasCurrentState ? 'Awaiting Core state' : state.capture.recording
-                ? 'trigger: ${state.capture.triggerSource}'
-                : 'Awaiting capture',
-            accent: state.capture.recording ? BinnacleColors.orange : BinnacleColors.tealBright,
-          ),
-          const SizedBox(height: 10),
-          _RiderCard(crew: crew),
-          const SizedBox(height: 10),
-          if (control.hasCurrentState) _HealthCard(health: state.health, ts: state.ts)
-          else const Text('Core health unavailable'),
-          const SizedBox(height: 20),
-          if (!pairing.isPaired)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.qr_code_scanner_outlined),
-                label: const Text('Pair a device'),
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const PairingScreen()),
-                ),
+    return BinnacleBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          title: const Text('My Boat'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.person_outline),
+              tooltip: 'Settings & account',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
               ),
             ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              icon: const Icon(Icons.videocam),
-              label: const Text('Go Live'),
-              onPressed: onGoLive,
-            ),
-          ),
-          if (AppConfig.isDemo) ...[
-            const SizedBox(height: 16),
-            Text(
-              'Demo mode — nothing above is a real connection. See Settings for details.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11),
-            ),
           ],
-        ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _StatusCard(
+              icon: Icons.link,
+              title: 'Binnacle connected',
+              statusLine: _connectionLine(control.status),
+              accent: _connectionColor(control.status),
+            ),
+            const SizedBox(height: 10),
+            _StatusCard(
+              icon: Icons.videocam_outlined,
+              title: 'Vision online',
+              // Vision's own liveness isn't modeled separately from the
+              // control-channel link yet — they're the same signal here
+              // honestly, not two independent checks dressed up as two.
+              statusLine: 'Vision readiness not reported',
+              accent: BinnacleColors.slate,
+            ),
+            const SizedBox(height: 10),
+            _StatusCard(
+              icon: Icons.gps_fixed,
+              title: 'Track ready',
+              statusLine: 'Track readiness not reported',
+              accent: BinnacleColors.slate,
+            ),
+            const SizedBox(height: 10),
+            _StatusCard(
+              icon: state.capture.recording
+                  ? Icons.fiber_manual_record
+                  : Icons.circle_outlined,
+              title: !control.hasCurrentState
+                  ? 'Recording state unknown'
+                  : state.capture.recording
+                      ? 'Recording — pass ${state.capture.passNumber}'
+                      : 'Not recording',
+              statusLine: !control.hasCurrentState
+                  ? 'Awaiting Core state'
+                  : state.capture.recording
+                      ? 'trigger: ${state.capture.triggerSource}'
+                      : 'Awaiting capture',
+              accent: state.capture.recording
+                  ? BinnacleColors.orange
+                  : BinnacleColors.tealBright,
+            ),
+            const SizedBox(height: 10),
+            _RiderCard(crew: crew),
+            const SizedBox(height: 10),
+            if (control.hasCurrentState)
+              _HealthCard(health: state.health, ts: state.ts)
+            else
+              const Text('Core health unavailable'),
+            const SizedBox(height: 20),
+            if (!pairing.isPaired)
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.qr_code_scanner_outlined),
+                  label: const Text('Pair a device'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const PairingScreen()),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.videocam),
+                label: const Text('Go Live'),
+                onPressed: onGoLive,
+              ),
+            ),
+            if (AppConfig.isDemo) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Demo mode — nothing above is a real connection. See Settings for details.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -142,7 +160,11 @@ class _StatusCard extends StatelessWidget {
   final String title;
   final String statusLine;
   final Color accent;
-  const _StatusCard({required this.icon, required this.title, required this.statusLine, required this.accent});
+  const _StatusCard(
+      {required this.icon,
+      required this.title,
+      required this.statusLine,
+      required this.accent});
 
   @override
   Widget build(BuildContext context) {
@@ -151,13 +173,15 @@ class _StatusCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: BinnacleColors.navy,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
+        border:
+            Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
       ),
       child: Row(children: [
         Container(
           width: 36,
           height: 36,
-          decoration: BoxDecoration(color: accent.withValues(alpha: 0.12), shape: BoxShape.circle),
+          decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12), shape: BoxShape.circle),
           child: Icon(icon, size: 18, color: accent),
         ),
         const SizedBox(width: 12),
@@ -165,8 +189,14 @@ class _StatusCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 13.5)),
-              Text(statusLine, style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.slate)),
+              Text(title,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontSize: 13.5)),
+              Text(statusLine,
+                  style: BinnacleTheme.mono(
+                      size: 10.5, color: BinnacleColors.slate)),
             ],
           ),
         ),
@@ -190,26 +220,35 @@ class _RiderCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: BinnacleColors.navy,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
+        border:
+            Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
       ),
       child: Row(children: [
         Container(
           width: 36,
           height: 36,
-          decoration: BoxDecoration(color: BinnacleColors.slate.withValues(alpha: 0.12), shape: BoxShape.circle),
-          child: const Icon(Icons.person_outline, size: 18, color: BinnacleColors.slate),
+          decoration: BoxDecoration(
+              color: BinnacleColors.slate.withValues(alpha: 0.12),
+              shape: BoxShape.circle),
+          child: const Icon(Icons.person_outline,
+              size: 18, color: BinnacleColors.slate),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Who\'s riding', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 13.5)),
+              Text('Who\'s riding',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontSize: 13.5)),
               Text(
                 crew.riders.length <= 1
                     ? 'Automatic rider ID needs Track — not available yet'
                     : '${crew.riders.length} in crew — automatic ID needs Track',
-                style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.slate),
+                style:
+                    BinnacleTheme.mono(size: 10.5, color: BinnacleColors.slate),
               ),
             ],
           ),
@@ -242,11 +281,16 @@ class _HealthCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: BinnacleColors.navy,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
+        border:
+            Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.09)),
       ),
       child: Row(
         children: [
-          Expanded(child: _HealthStat(label: 'TEMP', value: '${health.tempC.toStringAsFixed(0)}°C', warn: warm)),
+          Expanded(
+              child: _HealthStat(
+                  label: 'TEMP',
+                  value: '${health.tempC.toStringAsFixed(0)}°C',
+                  warn: warm)),
           _VDivider(),
           Expanded(
             child: _HealthStat(
@@ -256,7 +300,9 @@ class _HealthCard extends StatelessWidget {
             ),
           ),
           _VDivider(),
-          Expanded(child: _HealthStat(label: 'UPDATED', value: _ago(ts), warn: stale)),
+          Expanded(
+              child:
+                  _HealthStat(label: 'UPDATED', value: _ago(ts), warn: stale)),
         ],
       ),
     );
@@ -265,15 +311,18 @@ class _HealthCard extends StatelessWidget {
 
 class _VDivider extends StatelessWidget {
   @override
-  Widget build(BuildContext context) =>
-      Container(width: 1, height: 30, color: BinnacleColors.offWhite.withValues(alpha: 0.09));
+  Widget build(BuildContext context) => Container(
+      width: 1,
+      height: 30,
+      color: BinnacleColors.offWhite.withValues(alpha: 0.09));
 }
 
 class _HealthStat extends StatelessWidget {
   final String label;
   final String value;
   final bool warn;
-  const _HealthStat({required this.label, required this.value, required this.warn});
+  const _HealthStat(
+      {required this.label, required this.value, required this.warn});
 
   @override
   Widget build(BuildContext context) {
@@ -286,7 +335,9 @@ class _HealthStat extends StatelessWidget {
                 fontSize: 14,
                 color: warn ? BinnacleColors.amber : BinnacleColors.offWhite)),
         const SizedBox(height: 2),
-        Text(label, style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.slateDim)),
+        Text(label,
+            style:
+                BinnacleTheme.mono(size: 8.5, color: BinnacleColors.slateDim)),
       ],
     );
   }

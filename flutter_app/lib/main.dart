@@ -19,6 +19,7 @@ import 'core/models/fall_entry.dart';
 import 'core/models/wake_entry.dart'; // WakeRepository — no longer re-exported via compete_screen.dart
 import 'ui/screens/my_boat_screen.dart';
 import 'ui/screens/session_screen.dart';
+import 'ui/screens/splash_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
 
 void main() {
@@ -47,10 +48,14 @@ class _ConfigErrorApp extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.error_outline, color: BinnacleColors.orange, size: 40),
+                const Icon(Icons.error_outline,
+                    color: BinnacleColors.orange, size: 40),
                 const SizedBox(height: 16),
                 const Text('Configuration error',
-                    style: TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 18)),
+                    style: TextStyle(
+                        fontFamily: 'Space Grotesk',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 18)),
                 const SizedBox(height: 8),
                 Text(
                   'BINNACLE_APP_MODE=core requires BINNACLE_CORE_URL.\n'
@@ -77,7 +82,9 @@ class BinnacleConnectApp extends StatelessWidget {
         // PairingService must exist before ControlChannelService connects,
         // since the credential it holds is what gets attached to the socket.
         // See Connect_Device_Pairing_and_Authorization_Design_v0.1.
-        ChangeNotifierProvider(create: (_) => PairingService()..restore()),
+        // restore() itself is now awaited by _AppStartup below (splash
+        // screen) rather than fired-and-forgotten here.
+        ChangeNotifierProvider(create: (_) => PairingService()),
 
         // ProxyProvider so ControlChannelService always has the current
         // PairingService attached, including if pairing state changes after
@@ -92,7 +99,9 @@ class BinnacleConnectApp extends StatelessWidget {
             // session, which is the point: an honest "Simulated" badge
             // instead of a connection attempt that immediately fails and
             // shows "Offline" on every single demo run.
-            if (AppConfig.mode == AppMode.core && pairing.isPaired && service.status == LinkStatus.offline) {
+            if (AppConfig.mode == AppMode.core &&
+                pairing.isPaired &&
+                service.status == LinkStatus.offline) {
               service.connect(
                 deviceId: pairing.credential!.deviceId,
                 endpoint: AppConfig.coreWebSocketEndpoint(),
@@ -115,7 +124,8 @@ class BinnacleConnectApp extends StatelessWidget {
         // catalog fetch — same idempotent-guard pattern as
         // ControlChannelService.connect() above (guard on a "already tried"
         // flag rather than re-triggering every rebuild).
-        ChangeNotifierProxyProvider2<PairingService, ControlChannelService, ClipRepository>(
+        ChangeNotifierProxyProvider2<PairingService, ControlChannelService,
+            ClipRepository>(
           create: (_) {
             final clips = ClipRepository();
             if (AppConfig.isDemo) clips.seedDemo();
@@ -146,10 +156,49 @@ class BinnacleConnectApp extends StatelessWidget {
         title: 'Binnacle Connect',
         debugShowCheckedModeBanner: false,
         theme: BinnacleTheme.dark(),
-        home: const _RootShell(),
+        home: const _AppStartup(),
       ),
     );
   }
+}
+
+/// Shows the splash screen (brand moment, no logic of its own) until BOTH
+/// a minimum display floor AND PairingService.restore() — a real async
+/// Keychain/Keystore read, not a fabricated delay — have completed. This is
+/// a genuine readiness gate, not a fixed timer running alongside a
+/// fire-and-forgotten restore: whichever of the two takes longer decides
+/// when _RootShell (and with it, auth/navigation/deep-link handling and
+/// Core init) actually starts.
+class _AppStartup extends StatefulWidget {
+  const _AppStartup();
+
+  @override
+  State<_AppStartup> createState() => _AppStartupState();
+}
+
+class _AppStartupState extends State<_AppStartup> {
+  static const _minimumSplashDuration = Duration(milliseconds: 3500);
+
+  bool _showSplash = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // A failed credential read (corrupt Keychain/Keystore entry, platform
+    // channel unavailable, etc.) must not brick launch behind a permanent
+    // splash — restore() failing just means starting unpaired, which
+    // isPaired already treats as the fail-closed default.
+    final restoreFuture =
+        context.read<PairingService>().restore().catchError((_) {});
+    final minimumFloor = Future<void>.delayed(_minimumSplashDuration);
+    Future.wait([restoreFuture, minimumFloor]).then((_) {
+      if (mounted) setState(() => _showSplash = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _showSplash ? const SplashScreen() : const _RootShell();
 }
 
 class _RootShell extends StatefulWidget {
@@ -222,13 +271,21 @@ class _RootShellState extends State<_RootShell> {
               selectedIndex: _index,
               onDestinationSelected: (i) => setState(() => _index = i),
               backgroundColor: Colors.transparent,
-              indicatorColor: mobActive ? BinnacleColors.orange.withValues(alpha: 0.3) : null,
+              indicatorColor: mobActive
+                  ? BinnacleColors.orange.withValues(alpha: 0.3)
+                  : null,
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.directions_boat_outlined), label: 'My Boat'),
-                NavigationDestination(icon: Icon(Icons.videocam_outlined), label: 'Live'),
-                NavigationDestination(icon: Icon(Icons.timeline_outlined), label: 'Session'),
-                NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Library'),
-                NavigationDestination(icon: Icon(Icons.groups_outlined), label: 'Community'),
+                NavigationDestination(
+                    icon: Icon(Icons.directions_boat_outlined),
+                    label: 'My Boat'),
+                NavigationDestination(
+                    icon: Icon(Icons.videocam_outlined), label: 'Live'),
+                NavigationDestination(
+                    icon: Icon(Icons.timeline_outlined), label: 'Session'),
+                NavigationDestination(
+                    icon: Icon(Icons.grid_view_outlined), label: 'Library'),
+                NavigationDestination(
+                    icon: Icon(Icons.groups_outlined), label: 'Community'),
               ],
             ),
           ),

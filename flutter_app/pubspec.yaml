@@ -39,3 +39,10 @@ flutter:
     # presented as Core-backed media (mediaUrl for a real clip only ever
     # comes from HttpMediaCatalogService, a real Core fetch).
     - assets/demo/gopro_dev_footage.mp4
+    # Brand background used behind ambient/dashboard-style screens — see
+    # binnacle_background.dart. Deliberately not used behind the Live
+    # camera view or Library's dense grid, where real media is the point.
+    - assets/backgrounds/wave_glow.png
+    # Transparent Binnacle Marine Systems shield/compass mark — see
+    # splash_screen.dart, the only current user.
+    - assets/brand/binnacle_logo.png
