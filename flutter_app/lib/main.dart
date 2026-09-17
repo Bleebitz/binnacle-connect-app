@@ -20,6 +20,9 @@ import 'core/models/wake_entry.dart'; // WakeRepository — no longer re-exporte
 import 'ui/screens/my_boat_screen.dart';
 import 'ui/screens/session_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
+import 'core/services/connected_services.dart';
+import 'core/services/entitlement_service.dart';
+import 'core/services/live_broadcast_service.dart';
 
 void main() {
   // Core mode with no URL is a broken deploy, not a reason to quietly act
@@ -141,6 +144,37 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),
         ChangeNotifierProvider(create: (_) => FallRepository()),
+
+        // Connect Live (BIN-38). EntitlementService is the injectable
+        // entitlement boundary — StaticEntitlementService always reports
+        // Free because no real Binnacle Billing service exists yet (see
+        // entitlement_service.dart); this must never be swapped for a
+        // hard-coded paid tier here. ConnectedServicesService similarly
+        // ships only its honest not-connected/custom-RTMP implementation.
+        // Explicit type parameters: the UI reads the ABSTRACT service types
+        // (context.watch<EntitlementService>(), <ConnectedServicesService>())
+        // so a future real implementation can be swapped in here without
+        // touching any consumer — but that only works if the provider is
+        // registered under the interface type. Without <EntitlementService>
+        // here, ChangeNotifierProvider infers the concrete
+        // StaticEntitlementService type from `create`, and every
+        // context.watch<EntitlementService>() call throws
+        // ProviderNotFoundException.
+        ChangeNotifierProvider<EntitlementService>(create: (_) => StaticEntitlementService()),
+        ChangeNotifierProvider<ConnectedServicesService>(create: (_) => LocalConnectedServicesService()),
+        // ProxyProvider so the demo/Core transport choice follows the same
+        // AppConfig.isDemo split as every other service, and so the Core
+        // transport gets the SAME ControlChannelService instance (one
+        // authenticated socket, not a second connection).
+        ChangeNotifierProxyProvider<ControlChannelService, LiveBroadcastService>(
+          create: (context) => LiveBroadcastService(
+            transport: AppConfig.isDemo
+                ? DemoBroadcastTransport()
+                : CoreBroadcastTransport(control: context.read<ControlChannelService>()),
+            demo: AppConfig.isDemo,
+          ),
+          update: (context, control, live) => live!,
+        ),
       ],
       child: MaterialApp(
         title: 'Binnacle Connect',

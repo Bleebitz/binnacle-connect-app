@@ -19,6 +19,7 @@ import '../widgets/mob_alert_banner.dart';
 import '../widgets/simulated_wake_view.dart';
 import '../widgets/telemetry_overlay.dart';
 import 'library_screen.dart' show ClipRepository;
+import 'live_broadcast_screen.dart';
 
 // Layout and componentry follow the retro-hero / technical-instrument UX
 // prototype's capture screen (screen-capture) as closely as native widgets
@@ -315,6 +316,26 @@ class _CaptureScreenState extends State<CaptureScreen> {
             ),
             const SizedBox(height: 9),
             if (control.canBroadcast('boat')) _GoLiveBar(control: control, broadcast: state.broadcast),
+            const SizedBox(height: 9),
+            // Connect Live (BIN-38) — cloud/multi-destination broadcast
+            // (YouTube, Twitch, Binnacle Live, custom RTMP), a distinct
+            // concept from the on-boat broadcast toggle above. Its own
+            // screen owns destination/view selection and authoritative
+            // health; this is just the entry point required by
+            // architecture §2.1 ("press GO LIVE from the Live experience").
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.podcasts_outlined),
+                  label: const Text('Connect Live — broadcast to YouTube, Twitch & more'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LiveBroadcastScreen()),
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(height: 11),
             _QuickAdjustHandle(
               control: control,
