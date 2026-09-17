@@ -52,7 +52,7 @@ class MyBoatScreen extends StatelessWidget {
           _StatusCard(
             icon: Icons.link,
             title: 'Binnacle connected',
-            statusLine: _connectionLine(control.status),
+            statusLine: _connectionLine(control.status, control.everConnected, control.lastKnownRecording),
             accent: _connectionColor(control.status),
           ),
           const SizedBox(height: 10),
@@ -120,12 +120,25 @@ class MyBoatScreen extends StatelessWidget {
     );
   }
 
-  static String _connectionLine(LinkStatus s) => switch (s) {
+  // BIN-9: mirrors capture_screen.dart's _LinkBar distinction — "offline"
+  // alone cannot say whether Core was ever reached this session, or what
+  // it last said about recording, so both are threaded through here too
+  // rather than repeating the old, always-the-same offline caption.
+  static String _connectionLine(LinkStatus s, bool everConnected, bool? lastKnownRecording) => switch (s) {
         LinkStatus.simulated => 'Simulated — no Vision device paired',
         LinkStatus.connecting => 'Connecting…',
         LinkStatus.connected => 'Connected',
-        LinkStatus.stale => 'Not responding',
-        LinkStatus.offline => 'Offline — recording state unknown',
+        LinkStatus.stale => switch (lastKnownRecording) {
+            true => 'Not responding — was recording, Core continues autonomously',
+            false => 'Not responding — was not recording',
+            null => 'Not responding — recording was never confirmed',
+          },
+        LinkStatus.offline when !everConnected => 'Never connected this session',
+        LinkStatus.offline => switch (lastKnownRecording) {
+            true => 'Offline — was recording, Core continues autonomously',
+            false => 'Offline — was not recording',
+            null => 'Offline — recording was never confirmed',
+          },
       };
 
   static Color _connectionColor(LinkStatus s) => switch (s) {

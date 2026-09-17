@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../core/services/control_channel_service.dart';
 import '../../core/services/pairing_service.dart';
 import '../../core/models/credential.dart';
+import '../../core/models/vessel_state.dart'; // SafetyReadinessX.label
 import '../theme/binnacle_theme.dart';
 import 'pairing_screen.dart';
 import 'device_list_screen.dart';
@@ -57,8 +58,8 @@ class SettingsScreen extends StatelessWidget {
           ]),
           const SizedBox(height: 16),
           _Section(title: 'Safety', children: [
-            _Row('Fall detection', 'Readiness unknown'),
-            _Row('MOB alert', 'Readiness unknown'),
+            _Row('Fall detection', state.safety.fallDetectionReadiness.label),
+            _Row('MOB alert', state.safety.mobAlertReadiness.label),
             _Row('Escalation', '${state.safety.escalationSeconds}s'),
           ]),
           const SizedBox(height: 16),

@@ -102,7 +102,19 @@ class BinnacleConnectApp extends StatelessWidget {
           },
         ),
 
-        ChangeNotifierProvider(create: (_) => MobAlertState()),
+        // ProxyProvider so Core mode's MOB banner always mirrors Core's
+        // latest reported event (VesselState.mob) — see mob_alert_state.dart.
+        // Demo mode's MobAlertState never receives this update (applyCoreEvent
+        // is a no-op in demo builds); its only write path is the demo-only
+        // trigger button.
+        ChangeNotifierProxyProvider<ControlChannelService, MobAlertState>(
+          create: (_) => MobAlertState(),
+          update: (context, control, mob) {
+            final state = mob ?? MobAlertState();
+            if (!AppConfig.isDemo) state.applyCoreEvent(control.state.mob);
+            return state;
+          },
+        ),
         // Only fabricate telemetry in demo mode. A core-mode build with no
         // real telemetry connection yet should show honest zero/default
         // values, not simulated numbers that look like a live boat.
