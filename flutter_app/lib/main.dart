@@ -19,8 +19,8 @@ import 'core/models/fall_entry.dart';
 import 'core/models/wake_entry.dart'; // WakeRepository — no longer re-exported via compete_screen.dart
 import 'ui/screens/my_boat_screen.dart';
 import 'ui/screens/session_screen.dart';
-import 'ui/screens/splash_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
+import 'ui/widgets/connect_startup.dart';
 
 void main() {
   // Core mode with no URL is a broken deploy, not a reason to quietly act
@@ -82,8 +82,8 @@ class BinnacleConnectApp extends StatelessWidget {
         // PairingService must exist before ControlChannelService connects,
         // since the credential it holds is what gets attached to the socket.
         // See Connect_Device_Pairing_and_Authorization_Design_v0.1.
-        // restore() itself is now awaited by _AppStartup below (splash
-        // screen) rather than fired-and-forgotten here.
+        // restore() itself is now awaited by ConnectStartup (see the
+        // MaterialApp.builder below) rather than fired-and-forgotten here.
         ChangeNotifierProvider(create: (_) => PairingService()),
 
         // ProxyProvider so ControlChannelService always has the current
@@ -156,49 +156,21 @@ class BinnacleConnectApp extends StatelessWidget {
         title: 'Binnacle Connect',
         debugShowCheckedModeBanner: false,
         theme: BinnacleTheme.dark(),
-        home: const _AppStartup(),
+        // ConnectStartup wraps the Navigator itself (via builder), rather
+        // than replacing `home`, so _RootShell (and anything it does with
+        // routes — deep links, programmatic navigation) is mounted from the
+        // very first frame and simply sits behind the splash overlay until
+        // it fades out. See connect_startup.dart for why that matters and
+        // for the actual readiness/retry logic; PairingService.restore() is
+        // the real startup work ConnectStartup awaits.
+        builder: (context, child) => ConnectStartup(
+          initialize: () => context.read<PairingService>().restore(),
+          child: child ?? const SizedBox.shrink(),
+        ),
+        home: const _RootShell(),
       ),
     );
   }
-}
-
-/// Shows the splash screen (brand moment, no logic of its own) until BOTH
-/// a minimum display floor AND PairingService.restore() — a real async
-/// Keychain/Keystore read, not a fabricated delay — have completed. This is
-/// a genuine readiness gate, not a fixed timer running alongside a
-/// fire-and-forgotten restore: whichever of the two takes longer decides
-/// when _RootShell (and with it, auth/navigation/deep-link handling and
-/// Core init) actually starts.
-class _AppStartup extends StatefulWidget {
-  const _AppStartup();
-
-  @override
-  State<_AppStartup> createState() => _AppStartupState();
-}
-
-class _AppStartupState extends State<_AppStartup> {
-  static const _minimumSplashDuration = Duration(milliseconds: 3500);
-
-  bool _showSplash = true;
-
-  @override
-  void initState() {
-    super.initState();
-    // A failed credential read (corrupt Keychain/Keystore entry, platform
-    // channel unavailable, etc.) must not brick launch behind a permanent
-    // splash — restore() failing just means starting unpaired, which
-    // isPaired already treats as the fail-closed default.
-    final restoreFuture =
-        context.read<PairingService>().restore().catchError((_) {});
-    final minimumFloor = Future<void>.delayed(_minimumSplashDuration);
-    Future.wait([restoreFuture, minimumFloor]).then((_) {
-      if (mounted) setState(() => _showSplash = false);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      _showSplash ? const SplashScreen() : const _RootShell();
 }
 
 class _RootShell extends StatefulWidget {

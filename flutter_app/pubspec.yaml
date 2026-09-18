@@ -43,6 +43,13 @@ flutter:
     # binnacle_background.dart. Deliberately not used behind the Live
     # camera view or Library's dense grid, where real media is the point.
     - assets/backgrounds/wave_glow.png
-    # Transparent Binnacle Marine Systems shield/compass mark — see
-    # splash_screen.dart, the only current user.
+    # Original transparent Binnacle Marine Systems shield/compass mark.
+    # Preserved as-is (dark-navy lettering, suited to light/neutral
+    # backgrounds); not currently referenced by any screen — see
+    # binnacle_logo_dark_bg.png below for the splash's actual asset.
     - assets/brand/binnacle_logo.png
+    # Dark-background variant: same shield/compass, unchanged, with the
+    # BINNACLE / MARINE SYSTEMS lettering relit to a bright brushed-silver
+    # dimensional treatment for legibility against the splash's navy/wave
+    # background — see connect_startup.dart, the only current user.
+    - assets/brand/binnacle_logo_dark_bg.png

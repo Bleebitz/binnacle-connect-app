@@ -21,25 +21,32 @@ class CompeteScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final destinations = [
       (
-        'King of Wake', 'GPS-verified speed leaderboard, surf and ramp',
+        'King of Wake',
+        'GPS-verified speed leaderboard, surf and ramp',
         Icons.speed,
         () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => KingOfWakeScreen(repository: context.read<WakeRepository>()))),
+            builder: (_) =>
+                KingOfWakeScreen(repository: context.read<WakeRepository>()))),
       ),
       (
-        'Top Tricks', 'Community-voted trick leaderboard',
+        'Top Tricks',
+        'Community-voted trick leaderboard',
         Icons.auto_awesome,
         () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => TopTricksScreen(repository: context.read<TrickRepository>()))),
+            builder: (_) =>
+                TopTricksScreen(repository: context.read<TrickRepository>()))),
       ),
       (
-        'Best Falls', 'Submitted from real Vision/phone footage',
+        'Best Falls',
+        'Submitted from real Vision/phone footage',
         Icons.videocam_outlined,
         () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => BestFallsScreen(repository: context.read<FallRepository>()))),
+            builder: (_) =>
+                BestFallsScreen(repository: context.read<FallRepository>()))),
       ),
       (
-        'Riders', 'Season standings across all three',
+        'Riders',
+        'Season standings across all three',
         Icons.leaderboard_outlined,
         () => Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => RidersScreen(
@@ -58,8 +65,14 @@ class CompeteScreen extends StatelessWidget {
                 margin: const EdgeInsets.only(bottom: 10),
                 child: ListTile(
                   leading: Icon(d.$3, color: BinnacleColors.tealBright),
-                  title: Text(d.$1),
-                  subtitle: Text(d.$2, style: const TextStyle(fontSize: 11.5)),
+                  title: Text(d.$1,
+                      style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: BinnacleColors.offWhite)),
+                  subtitle: Text(d.$2,
+                      style: const TextStyle(
+                          fontSize: 14, color: BinnacleColors.slateLight)),
                   trailing: const Icon(Icons.chevron_right, size: 18),
                   onTap: d.$4,
                 ),

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../core/app_config.dart';
 import 'package:provider/provider.dart';
+import '../theme/binnacle_theme.dart';
 import '../widgets/binnacle_background.dart';
+import '../widgets/solid_panel.dart';
 import 'crew_screen.dart';
 import 'compete_hub_screen.dart';
 
@@ -24,13 +26,21 @@ class CommunityScreen extends StatelessWidget {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: AppBar(
-              backgroundColor: Colors.transparent,
+              backgroundColor: BinnacleColors.navy,
               elevation: 0,
               title: const Text('Community')),
           body: const Center(
+            child: SolidPanel(
+              margin: EdgeInsets.all(24),
               child: Text(
-                  'Community and Compete preview remains available in Demo.\n'
-                  'Live integration follows the Core ride experience.')),
+                'Community and Compete preview remains available in Demo.\n'
+                'Live integration follows the Core ride experience.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 15, height: 1.4, color: BinnacleColors.offWhite),
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -41,11 +51,15 @@ class CommunityScreen extends StatelessWidget {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: AppBar(
-            backgroundColor: Colors.transparent,
+            backgroundColor: BinnacleColors.navy,
             elevation: 0,
             title: const Text('Community'),
-            bottom:
-                const TabBar(tabs: [Tab(text: 'Crew'), Tab(text: 'Compete')]),
+            bottom: const TabBar(
+              tabs: [Tab(text: 'Crew'), Tab(text: 'Compete')],
+              labelColor: BinnacleColors.tealBright,
+              unselectedLabelColor: BinnacleColors.slateLight,
+              indicatorColor: BinnacleColors.tealBright,
+            ),
           ),
           body: TabBarView(children: [
             CrewScreen(repository: crewRepo),
