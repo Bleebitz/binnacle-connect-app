@@ -104,6 +104,16 @@ abstract interface class DemoMediaControls {
   /// The recorded video's real playback position, read fresh from the player.
   /// Throws [StateError] when the player is not ready.
   Future<Duration> readPlaybackPosition();
+
+  /// Live view of the recorded player's position, for the timeline.
+  ValueListenable<Duration> get position;
+
+  /// Seeks the recorded player. The player stays the single clock: Track state,
+  /// Snapshot and Highlight all read the position it reports after the seek.
+  Future<void> seekTo(Duration target);
+
+  ValueNotifier<DemoViewMode> get viewMode;
+  DemoRiderLock get riderLock;
 }
 
 class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
@@ -119,9 +129,19 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   @override
   final DemoZoom zoom = DemoZoom();
 
+  @override
+  final ValueNotifier<DemoViewMode> viewMode =
+      ValueNotifier(DemoViewMode.trackFollow);
+
+  @override
+  final DemoRiderLock riderLock = DemoRiderLock();
+
+  final ValueNotifier<Duration> _position = ValueNotifier(Duration.zero);
+
   Duration _lastPosition = Duration.zero;
   Duration? _sourceDuration;
   Future<Duration?> Function()? _positionReader;
+  Future<void> Function(Duration)? _seeker;
 
   DemoRecordedCameraSource({
     this.assetPath = defaultAssetPath,
@@ -145,17 +165,38 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   void attachPlayer({
     required Future<Duration?> Function() readPosition,
     required Duration? duration,
+    Future<void> Function(Duration)? seekTo,
   }) {
+    _seeker = seekTo;
     _positionReader = readPosition;
     _sourceDuration = duration;
   }
 
   void detachPlayer() {
     _positionReader = null;
+    _seeker = null;
+  }
+
+  @override
+  ValueListenable<Duration> get position => _position;
+
+  @override
+  Future<void> seekTo(Duration target) async {
+    final seeker = _seeker;
+    if (seeker == null) {
+      throw StateError('The recorded feed is not ready yet');
+    }
+    final total = _sourceDuration;
+    var t = target < Duration.zero ? Duration.zero : target;
+    if (total != null && t > total) t = total;
+    await seeker(t);
+    // Re-read from the player: whatever it reports is the truth.
+    await readPlaybackPosition();
   }
 
   void updatePlaybackPosition(Duration position) {
     _lastPosition = position;
+    _position.value = position;
     final next = reducer.reduce(position);
     if (_trackState.value.phase != next.phase) _trackState.value = next;
   }
@@ -177,6 +218,9 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   @override
   void dispose() {
     _trackState.dispose();
+    _position.dispose();
+    viewMode.dispose();
+    riderLock.dispose();
     zoom.dispose();
   }
 }

@@ -28,7 +28,17 @@ class DemoZoom extends ValueNotifier<double> {
   static const double max = 4.0;
   static const double step = 0.5;
 
-  DemoZoom() : super(min);
+  DemoZoom() : super(min) {
+    // Remember the last magnified level so a double-tap can toggle 1x <-> it.
+    addListener(() {
+      if (value > min) _lastMagnified = value;
+    });
+  }
+
+  double _lastMagnified = 2.0;
+
+  /// The most recent zoom above 1x (2.0x until the user has zoomed).
+  double get lastMagnified => _lastMagnified;
 
   static double clamp(double zoom) => zoom.clamp(min, max).toDouble();
 
@@ -39,6 +49,48 @@ class DemoZoom extends ValueNotifier<double> {
   void zoomOut() => value = clamp(value - step);
   void setZoom(double zoom) => value = clamp(zoom);
   void reset() => value = min;
+
+  /// Double-tap behaviour: from a magnified level return to 1x; from 1x go back
+  /// to the last magnified level (not a hard-coded 2x once the user has one).
+  void toggleReset() => value = value > min ? min : clamp(_lastMagnified);
+}
+
+/// Landscape view modes. In Recorded Demo these only change which overlays the
+/// UI shows; no ePTZ framing is performed by a recorded video.
+enum DemoViewMode { raw, trackFollow, manual }
+
+/// A candidate person for Rider Lock in the recorded demo. These are SIMULATED
+/// targets, not detections: the recorded clip carries no per-frame detector
+/// output. Real targets will come from Binnacle Track.
+@immutable
+class SimRiderTarget {
+  final String id;
+  final String label;
+  const SimRiderTarget(this.id, this.label);
+}
+
+/// Locally simulated Rider Lock selection for the recorded demo. It is Demo
+/// presentation state only and never an authoritative Track/Core lock.
+class DemoRiderLock extends ValueNotifier<String?> {
+  static const targets = [
+    SimRiderTarget('rider', 'RIDER (recorded pass)'),
+    SimRiderTarget('other', 'PERSON 2 (simulated)'),
+  ];
+
+  DemoRiderLock() : super('rider');
+
+  void select(String id) {
+    if (targets.any((t) => t.id == id)) value = id;
+  }
+
+  void clear() => value = null;
+
+  SimRiderTarget? get selected {
+    for (final t in targets) {
+      if (t.id == value) return t;
+    }
+    return null;
+  }
 }
 
 /// The window of the recorded source a Save Highlight covers, anchored on the

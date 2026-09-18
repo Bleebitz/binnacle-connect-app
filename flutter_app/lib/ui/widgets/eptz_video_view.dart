@@ -15,9 +15,24 @@ import 'simulated_wake_view.dart';
 class EptzVideoView extends StatelessWidget {
   final CameraMediaSource source;
 
+  /// How the video fills its box. Portrait crops to fill; the landscape console
+  /// shows the whole frame so nothing of the rider is cropped by the display.
+  final BoxFit fit;
+
+  /// Whether the video handles its own two-finger pinch (portrait). The
+  /// landscape console owns all gestures and turns this off.
+  final bool enablePinch;
+
+  /// Whether this view draws its own recorded-feed label. The landscape console
+  /// draws the label itself, inside the display safe area.
+  final bool showDemoLabel;
+
   const EptzVideoView({
     super.key,
     required this.source,
+    this.fit = BoxFit.cover,
+    this.enablePinch = true,
+    this.showDemoLabel = true,
   });
 
   @override
@@ -30,7 +45,7 @@ class EptzVideoView extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (source case DemoRecordedCameraSource demo)
-              _DemoRecordedVideo(source: demo)
+              _DemoRecordedVideo(source: demo, fit: fit, enablePinch: enablePinch)
             else
               StreamBuilder<void>(
                 stream:
@@ -67,7 +82,7 @@ class EptzVideoView extends StatelessWidget {
                     ),
                 },
               ),
-            if (source.isRecordedDemo)
+            if (source.isRecordedDemo && showDemoLabel)
               Positioned(
                 top: 10,
                 right: 10,
@@ -94,7 +109,10 @@ class EptzVideoView extends StatelessWidget {
 
 class _DemoRecordedVideo extends StatefulWidget {
   final DemoRecordedCameraSource source;
-  const _DemoRecordedVideo({required this.source});
+  final BoxFit fit;
+  final bool enablePinch;
+  const _DemoRecordedVideo(
+      {required this.source, required this.fit, required this.enablePinch});
 
   @override
   State<_DemoRecordedVideo> createState() => _DemoRecordedVideoState();
@@ -123,6 +141,7 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
       widget.source.attachPlayer(
         readPosition: () => _controller.position,
         duration: _controller.value.duration,
+        seekTo: _controller.seekTo,
       );
       if (mounted) setState(() => _ready = true);
     } catch (_) {
@@ -159,7 +178,7 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
     final size = _controller.value.size;
     final video = ClipRect(
       child: FittedBox(
-        fit: BoxFit.cover,
+        fit: widget.fit,
         alignment: Alignment.center,
         child: SizedBox(
           width: size.width,
@@ -171,9 +190,7 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
     // Digital zoom is a local presentation change of the recorded video only;
     // the surrounding controls and labels are siblings in the parent Stack and
     // are never scaled.
-    return DemoPinchZoom(
-      zoom: widget.source.zoom,
-      child: ValueListenableBuilder<double>(
+    final zoomed = ValueListenableBuilder<double>(
         valueListenable: widget.source.zoom,
         child: video,
         builder: (context, zoom, child) => ClipRect(
@@ -183,8 +200,10 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
             child: child,
           ),
         ),
-      ),
-    );
+      );
+    return widget.enablePinch
+        ? DemoPinchZoom(zoom: widget.source.zoom, child: zoomed)
+        : zoomed;
   }
 }
 

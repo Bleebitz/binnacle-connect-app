@@ -20,6 +20,7 @@ import 'package:binnacle_connect/ui/screens/capture_screen.dart';
 import 'package:binnacle_connect/ui/screens/library_screen.dart';
 import 'package:binnacle_connect/ui/theme/binnacle_theme.dart';
 
+import 'support/screen_size.dart';
 import 'support/fake_demo_media.dart';
 
 class _Harness {
@@ -90,6 +91,7 @@ void main() {
   testWidgets(
       'media controls are enabled, vessel controls stay disabled, no Core command is sent',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness();
     addTearDown(h.dispose);
     await _pumpScreen(tester, h);
@@ -130,6 +132,7 @@ void main() {
   testWidgets(
       'zoom + and - change the local zoom in 0.5x steps and clamp at 1.0x and 4.0x',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness();
     addTearDown(h.dispose);
     await _pumpScreen(tester, h);
@@ -167,6 +170,7 @@ void main() {
   testWidgets(
       'Snapshot saves a real image of the playback position to the Library',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness(position: const Duration(seconds: 47));
     addTearDown(h.dispose);
     await _pumpScreen(tester, h);
@@ -188,6 +192,7 @@ void main() {
   testWidgets(
       'Save Highlight uses the playhead and the configured pre/post roll',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness(position: const Duration(seconds: 47));
     addTearDown(h.dispose);
     await _pumpScreen(tester, h);
@@ -209,6 +214,7 @@ void main() {
 
   testWidgets('a highlight near the end of the source clamps to it',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness(position: const Duration(seconds: 128));
     addTearDown(h.dispose);
     await _pumpScreen(tester, h);
@@ -224,6 +230,7 @@ void main() {
 
   testWidgets('a failed snapshot shows the error and saves nothing',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness();
     addTearDown(h.dispose);
     h.extractor.failWith = FrameExtractionException('decoder unavailable');
@@ -241,6 +248,7 @@ void main() {
   testWidgets(
       'capture before the recorded feed is ready fails visibly, not silently',
       (tester) async {
+    usePortraitPhone(tester);
     final h = _Harness(playerReady: false);
     addTearDown(h.dispose);
     await _pumpScreen(tester, h);
