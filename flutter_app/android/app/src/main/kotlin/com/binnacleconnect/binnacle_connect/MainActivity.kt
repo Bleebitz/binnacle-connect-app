@@ -70,7 +70,7 @@ class MainActivity : FlutterActivity() {
             throw TrimException("insufficient_space", "Not enough free storage to save an edited copy")
         }
         val extractor = MediaExtractor()
-        var muxer: MediaMuxer? = null
+        var muxerRef: MediaMuxer? = null
         try {
             extractor.setDataSource(src)
             val rotation = MediaMetadataRetriever().let { r ->
@@ -79,7 +79,8 @@ class MainActivity : FlutterActivity() {
                     r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
                 } finally { r.release() }
             }
-            muxer = MediaMuxer(dst, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            val muxer = MediaMuxer(dst, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxerRef = muxer
             muxer.setOrientationHint(rotation)
             val indexMap = HashMap<Int, Int>()
             var maxSize = 1 * 1024 * 1024
@@ -103,7 +104,7 @@ class MainActivity : FlutterActivity() {
             var lastReport = 0L
             while (true) {
                 if (cancelTrim) {
-                    muxer.stop(); muxer.release(); muxer = null
+                    muxer.stop(); muxer.release(); muxerRef = null
                     File(dst).delete()
                     return "cancelled"
                 }
@@ -126,11 +127,11 @@ class MainActivity : FlutterActivity() {
             }
             muxer.stop()
             muxer.release()
-            muxer = null
+            muxerRef = null
             onProgress(1.0)
             return "ok"
         } finally {
-            try { muxer?.release() } catch (_: Exception) {}
+            try { muxerRef?.release() } catch (_: Exception) {}
             extractor.release()
         }
     }

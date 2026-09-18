@@ -5,6 +5,8 @@ Scope: BIN-37's client-reachable work — Library media import, Community's
 Post a highlight, and finishing/reusing BIN-38's Live destination-selection
 surface (PR #5).
 
+> **Round 2 update (2026-09-18): sections 1-5 below are the first pass and are partly superseded by section 6.** The "Posted to Crew" / "Publish" wording in section 1 was inaccurate: that action is a local, phone-only session entry and is now labelled "Save to Crew sessions". The screenshot `s25_posted_to_crew.png` shows the old wording. Nothing on any device was sent to another person or a service.
+
 ## 1. What's real end to end (verified on a physical device)
 
 Device: Samsung Galaxy S25 Ultra, model `SM_S938U`, serial `R5CY13C57LT`.
@@ -112,3 +114,94 @@ system picker round-trip, Post a highlight, Connect Live) showed no
 No login or biometric authentication was added in this change. See
 `docs/evidence/CORE_USER_ACCOUNT_API_PROPOSAL.md` (merged in PR #9) for the
 still-pending proposal on what a real account system would need.
+
+## 6. Round 2 — verified result (build 2010)
+
+Legend: **WORKS (device)** = driven on the S25 Ultra with project-owned test
+media; **WORKS (test)** = automated tests with fakes, not a real backend;
+**BLOCKED** = no underlying service exists.
+
+### 6.1 "Post to Crew" — what it actually does (device-verified)
+| Question | Finding |
+|---|---|
+| Survives app restart? | **Yes.** Entry saved, app force-stopped and relaunched: Community → Crew → Sessions still shows "Today — 1 highlight saved on this phone" (`11_crew_after_restart.png`). Before this round it was in-memory only and was lost on restart; `CrewRepository` now persists riders, sessions and unsent drafts locally (SharedPreferences). |
+| Media playable after restart? | Yes — the Library entry points at an app-private file that persists (Library entries and their files survive restart; the edited copy played, see 6.3). |
+| Visible only on this phone or to other crew? | **Only this phone.** There is no account, membership, or sync service. No other crew member can receive it. |
+| Audience enforced by a backend? | **No.** The only audience is "Crew sessions on this phone (not shared)"; Public is disabled with the real reason. |
+| Wording | Renamed "Save to Crew sessions"; the confirmation says it was saved on this phone only and not sent to crew members. |
+
+Real shared Crew publishing depends on authenticated backend storage,
+membership and access enforcement (BIN-46, BIN-40, BIN-41/48).
+
+### 6.2 Instagram
+Sources: Meta's Instagram Live Producer page (about.instagram.com — "limited
+access", instagram.com only; issues a URL + stream key that changes each
+session, used as a Custom RTMP destination) and Meta's Instagram Platform
+content-publishing docs (images, videos, reels, carousels, stories; live
+video is not a listed publishable type). Account eligibility beyond "limited
+access" is not stated on the pages consulted, so none is claimed. UI text is
+now: **"Instagram streaming is not supported by this implementation."**
+Connect has no Live Producer or Graph API integration and promises none.
+(`12_connect_live_destinations.png`)
+
+### 6.3 Highlight editor (device-verified with `BINNACLE_TEST_clip.mp4`, 12 s, generated locally)
+- Trim 0:03–0:09 (range sliders), Square framing with crop-position slider,
+  cover frame, preview, **Save as edited copy** produced a **separate 6 s
+  file** (2,624 KB) while the original stays (4,850 KB) — confirmed in
+  Storage. Playback of the copy starts at the cut (frame timecode ≈6.3 s of
+  source inside a 6 s clip). Audio track and rotation are copied.
+- Export is a **lossless trim** via Android MediaExtractor/MediaMuxer (no
+  GPL/FFmpeg). The start snaps to the previous keyframe. Progress %, Cancel
+  (native side deletes the partial file), an insufficient-space check
+  (needs source size + 8 MB free), and missing-source / unsupported-format
+  errors are implemented.
+- **Not baked into the file:** portrait/landscape/square crop stays an edit
+  definition applied at playback (a crop requires re-encoding). An edited
+  copy is therefore *not* a standalone cropped video for sharing.
+- Not device-tested: the cancel path, the insufficient-space path, and a
+  portrait-source orientation. Those are code-reviewed only.
+- Screens: `04_editor_square.png`, `05_edited_playing.png`.
+
+### 6.4 Storage management
+`06_storage.png`: real per-file sizes (this phone 9.6 MB, 5 items), awaiting
+upload, "Confirmed stored remotely: none", Core storage "not available".
+Delete = remove the app copy only, with confirmation; no cloud delete exists
+(no cloud) and the phone-gallery original is never touched. Fix this round:
+deleting an entry no longer removes a file another Library entry still uses.
+
+### 6.5 Requirement tracker (not "complete because UI exists")
+| Requirement | Status |
+|---|---|
+| Offline upload queue: persistence, states, pause/resume/cancel/retry, Wi-Fi/cellular preference, duplicate guard, failure reasons | **WORKS (test)** — state machine and persistence covered with a fake uploader. **BLOCKED for real transfer** (no upload service; production `NoOpMediaUploadService`). Settings → Uploads on device (`07_settings_uploads.png`). No background execution: uploads only run while the app is open. |
+| Basic highlight editor | **WORKS (device)** — trim / cover / preview / exported copy; framing playback-only (6.3). |
+| Pre-stream check | **WORKS (test)** — blocking/advisory logic, real HTTP timing. On device it is unreachable because no destination can be linked (BIN-46). No broadcast was started. |
+| Privacy / sharing controls | **BLOCKED** — needs accounts + backend (BIN-40/46). No fake controls added; everything is private on the phone. |
+| Storage management | **WORKS (device)** for local; remote/Core rows honestly empty/unavailable. |
+| Session organization | **PARTIAL (test)** — manual session assignment with "Unassigned". Not built: date filtering, Library grouping by session/date/rider, favorites filter, manual rider-tag UI in Library. No machine ID inferred. |
+| Public Community safeguards (report / block / removal / moderation) | **BLOCKED** — no moderation backend or identity; public publishing stays unavailable. |
+
+### 6.6 Dependency table
+| Feature blocked | Exact missing item | Issue | Smallest next step | Proving test |
+|---|---|---|---|---|
+| Real media upload (queue to confirmed remote) | Deployed private S3 bucket + upload-authorization contract + identity for who may upload. Provider direction is approved (AWS S3/CloudFront/MediaConvert, BIN-48) but nothing is deployed and no contract is final | BIN-48, BIN-41, BIN-46 | Owner decision on account scope (see `CORE_USER_ACCOUNT_API_PROPOSAL.md`) and AWS account/region/spend approval; then an S3 multipart `MediaUploadService` behind the existing interface | Upload the test clip, HEAD the object, compare checksum, mark uploaded only on match; unauthenticated GET returns 403 |
+| Authorized playback / share | CloudFront signed URL/cookie issuance + entitlement lookup | BIN-48, BIN-46 | Signed-URL endpoint against a real S3 object | Authorized URL plays; expired/unauthorized URL is blocked |
+| Live broadcast to a real destination | Core `request_live_broadcast` implementation; Cloudflare Stream (preferred candidate) live input; provider OAuth linking or a user-entered RTMP key held server-side | BIN-39, BIN-46 | Create a Cloudflare Stream live input + one custom-RTMP destination (needs account/spend approval) | A real test stream reaches the destination; disconnect/reconnect measured. Needs your approval of destination and content |
+| Shared Crew / privacy / reactions across devices | Accounts, membership, access enforcement | BIN-46, BIN-40 | Approve the smallest account scope: Core-issued per-boat member accounts (see proposal); no biometrics | A second device with a different member sees / does not see content per permission |
+| Community moderation | Moderation queue/service, identity to block/report against | BIN-40 (chat/comments deliberately deferred), BIN-46 | Decide moderation owner/process; add a report endpoint | Report creates a queue item; blocked user's content is hidden |
+| Core storage telemetry | Core reporting storage stats | Core team | Add a field to the state schema | Value matches Core disk |
+
+Nothing above was assumed absent merely because an endpoint is missing: the
+Cloudflare-live / AWS-durable-media direction in the approved architecture
+v0.1 is recorded as *preferred candidates, not deployed, not contracted*.
+
+### 6.7 Personal photo
+During the previous on-device session one of the user's own photos was
+imported into the app. It was not opened, uploaded or captured in evidence.
+Nothing has been deleted; removal awaits the owner's answer. Round 2 device
+testing used only `BINNACLE_TEST_clip.mp4` (generated with a local tool).
+
+### 6.8 Build / device
+Installed before: `versionCode=2009`. Now: `versionCode=2010`, installed with
+`adb install -r` over the existing debug-signed install (`firstInstallTime`
+unchanged, 2026-09-16 14:24, so data was preserved; no uninstall/clear).
+Logcat crash buffer empty. Screenshots: `docs/evidence/media-round2/`.
