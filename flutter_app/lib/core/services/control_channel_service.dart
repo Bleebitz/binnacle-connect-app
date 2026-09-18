@@ -78,6 +78,16 @@ class ControlChannelService extends ChangeNotifier {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get webrtcSignals => _webrtcSignals.stream;
 
+  // Connect Live (BIN-38) — reuses this same authenticated socket rather
+  // than a second connection to an invented cloud endpoint, exactly like
+  // WebRTC signaling above. 'live_broadcast_state' is this client's
+  // best-effort wire shape for a push update about the shared cloud
+  // ingest or one destination, unverified against a real Core/cloud (see
+  // CoreBroadcastTransport in live_broadcast_service.dart).
+  final StreamController<Map<String, dynamic>> _liveBroadcastUpdates =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get liveBroadcastUpdates => _liveBroadcastUpdates.stream;
+
   /// Throws [CommandRejected] under the same conditions sendCommand does —
   /// signaling requires the same authenticated, connected link a command
   /// does, not a separate standard.
@@ -274,6 +284,9 @@ class ControlChannelService extends ChangeNotifier {
       } else if (topic == 'webrtc_answer' || topic == 'webrtc_ice') {
         final payload = j['payload'];
         if (payload is Map<String, dynamic>) _webrtcSignals.add(j);
+      } else if (topic == 'live_broadcast_state') {
+        final payload = j['payload'];
+        if (payload is Map<String, dynamic>) _liveBroadcastUpdates.add(payload);
       }
     } catch (_) {
       debugPrint('ControlChannelService: malformed message ignored');
@@ -401,6 +414,7 @@ class ControlChannelService extends ChangeNotifier {
     _disposed = true;
     _closeTransport();
     _webrtcSignals.close();
+    _liveBroadcastUpdates.close();
     super.dispose();
   }
 }

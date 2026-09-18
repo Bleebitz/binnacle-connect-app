@@ -66,6 +66,13 @@ class RolePolicy {
     'start_broadcast_boat',
     'stop_broadcast',
     'set_broadcast_notice',
+    // Connect Live (BIN-38) — cloud/multi-destination broadcast, a distinct
+    // concept from the on-boat broadcast above (see live_broadcast.dart's
+    // module comment). Crew-allowed like on-boat broadcast: the destination
+    // is the crew member's own linked account/entitlement, not a boat-wide
+    // public toggle.
+    'request_live_broadcast',
+    'stop_live_broadcast',
   };
 
   static const Set<String> _ownerOnly = {

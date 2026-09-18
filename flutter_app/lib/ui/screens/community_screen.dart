@@ -3,6 +3,7 @@ import '../../core/app_config.dart';
 import 'package:provider/provider.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/binnacle_background.dart';
+import '../widgets/post_highlight_sheet.dart';
 import '../widgets/solid_panel.dart';
 import 'crew_screen.dart';
 import 'compete_hub_screen.dart';
@@ -65,6 +66,14 @@ class CommunityScreen extends StatelessWidget {
             CrewScreen(repository: crewRepo),
             const CompeteScreen(),
           ]),
+          floatingActionButton: FloatingActionButton.extended(
+            // See library_screen.dart's Add media FAB for why this needs
+            // an explicit unique tag.
+            heroTag: 'community-post-highlight-fab',
+            onPressed: () => showPostHighlightSheet(context),
+            icon: const Icon(Icons.movie_creation_outlined),
+            label: const Text('Post a highlight'),
+          ),
         ),
       ),
     );

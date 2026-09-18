@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/models/clip.dart' show Clip, ClipKind;
 import '../../core/models/fall_entry.dart';
+import '../../core/services/media_import_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
+import '../widgets/media_import_sheet.dart';
 import 'library_screen.dart' show ClipRepository;
 
 /// Best Falls. Submission requires a real captured clip (Vision or phone —
@@ -65,6 +67,7 @@ class _BestFallsScreenState extends State<BestFallsScreen> {
                   ],
                 ),
           floatingActionButton: FloatingActionButton.extended(
+            heroTag: 'best-falls-submit-fab',
             onPressed: () => _openEntrySheet(context),
             icon: const Icon(Icons.add),
             label: const Text('Submit a fall'),
@@ -261,8 +264,14 @@ class _EntrySheet extends StatelessWidget {
     }
   }
 
-  void _importAndSubmit(BuildContext context) {
-    final clip = context.read<ClipRepository>().importFallClip();
+  Future<void> _importAndSubmit(BuildContext context) async {
+    final clip = await pickAndImportMedia(
+      context,
+      kind: ImportMediaKind.video,
+      kindOverride: ClipKind.fall,
+      titleOverride: 'Imported fall clip',
+    );
+    if (clip == null || !context.mounted) return; // cancelled or failed — already reported
     _submitFromClip(context, clip);
   }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -12,7 +13,10 @@ import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
 import 'ui/screens/capture_screen.dart';
 import 'ui/screens/community_screen.dart';
 import 'core/services/media_catalog_service.dart';
+import 'core/services/media_import_service.dart';
+import 'core/services/media_upload_service.dart';
 import 'ui/screens/library_screen.dart';
+import 'core/services/video_trim_service.dart';
 import 'ui/screens/crew_screen.dart';
 import 'core/models/trick_entry.dart';
 import 'core/models/fall_entry.dart';
@@ -21,6 +25,9 @@ import 'ui/screens/my_boat_screen.dart';
 import 'ui/screens/session_screen.dart';
 import 'ui/theme/binnacle_theme.dart';
 import 'ui/widgets/connect_startup.dart';
+import 'core/services/connected_services.dart';
+import 'core/services/entitlement_service.dart';
+import 'core/services/live_broadcast_service.dart';
 
 void main() {
   // Core mode with no URL is a broken deploy, not a reason to quietly act
@@ -120,14 +127,33 @@ class BinnacleConnectApp extends StatelessWidget {
           if (AppConfig.isDemo) telemetry.startSimulated();
           return telemetry;
         }),
+        // Real system photo/video picker + local copy — see
+        // media_import_service.dart. Registered under the abstract type
+        // for the same reason as EntitlementService above. Declared
+        // *before* ClipRepository below so ClipRepository's own create
+        // callback can read it via context (a sibling provider declared
+        // earlier in this list is an ancestor of the rest, not the other
+        // way around).
+        Provider<MediaImportService>(create: (_) => ImagePickerMediaImportService()),
+        // No cloud upload backend exists yet (BIN-41/BIN-48 both Todo) —
+        // see media_upload_service.dart's module comment for why this
+        // stays NoOp rather than guessing an endpoint.
+        Provider<MediaUploadService>(create: (_) => NoOpMediaUploadService()),
+
         // ProxyProvider2 so a real Core connection triggers exactly one real
         // catalog fetch — same idempotent-guard pattern as
         // ControlChannelService.connect() above (guard on a "already tried"
         // flag rather than re-triggering every rebuild).
         ChangeNotifierProxyProvider2<PairingService, ControlChannelService,
             ClipRepository>(
-          create: (_) {
-            final clips = ClipRepository();
+          create: (context) {
+            final clips = ClipRepository(uploader: context.read<MediaUploadService>());
+            // Phone-imported media is independent of demo/Core mode — a
+            // real local file the user picked, not fetched from anywhere
+            // — so it's restored before/alongside either seed path rather
+            // than gated on AppConfig.isDemo. hydrate() also starts the
+            // real offline-upload-queue's connectivity subscription.
+            unawaited(clips.hydrate());
             if (AppConfig.isDemo) clips.seedDemo();
             return clips;
           },
@@ -147,10 +173,44 @@ class BinnacleConnectApp extends StatelessWidget {
             return repo;
           },
         ),
-        ChangeNotifierProvider(create: (_) => CrewRepository()),
+        Provider<VideoTrimService>(create: (_) => PlatformVideoTrimService()),
+        ChangeNotifierProvider(
+          create: (_) => CrewRepository(store: CrewLocalStore())..hydrate(),
+        ),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),
         ChangeNotifierProvider(create: (_) => FallRepository()),
+
+        // Connect Live (BIN-38). EntitlementService is the injectable
+        // entitlement boundary — StaticEntitlementService always reports
+        // Free because no real Binnacle Billing service exists yet (see
+        // entitlement_service.dart); this must never be swapped for a
+        // hard-coded paid tier here. ConnectedServicesService similarly
+        // ships only its honest not-connected/custom-RTMP implementation.
+        // Explicit type parameters: the UI reads the ABSTRACT service types
+        // (context.watch<EntitlementService>(), <ConnectedServicesService>())
+        // so a future real implementation can be swapped in here without
+        // touching any consumer — but that only works if the provider is
+        // registered under the interface type. Without <EntitlementService>
+        // here, ChangeNotifierProvider infers the concrete
+        // StaticEntitlementService type from `create`, and every
+        // context.watch<EntitlementService>() call throws
+        // ProviderNotFoundException.
+        ChangeNotifierProvider<EntitlementService>(create: (_) => StaticEntitlementService()),
+        ChangeNotifierProvider<ConnectedServicesService>(create: (_) => LocalConnectedServicesService()),
+        // ProxyProvider so the demo/Core transport choice follows the same
+        // AppConfig.isDemo split as every other service, and so the Core
+        // transport gets the SAME ControlChannelService instance (one
+        // authenticated socket, not a second connection).
+        ChangeNotifierProxyProvider<ControlChannelService, LiveBroadcastService>(
+          create: (context) => LiveBroadcastService(
+            transport: AppConfig.isDemo
+                ? DemoBroadcastTransport()
+                : CoreBroadcastTransport(control: context.read<ControlChannelService>()),
+            demo: AppConfig.isDemo,
+          ),
+          update: (context, control, live) => live!,
+        ),
       ],
       child: MaterialApp(
         title: 'Binnacle Connect',

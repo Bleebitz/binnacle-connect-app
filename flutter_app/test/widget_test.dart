@@ -2,11 +2,15 @@
 // counter-app test that `flutter create` generates by default, which
 // referenced a nonexistent MyApp class and tested nothing about this app.
 
+import 'package:connectivity_plus_platform_interface/connectivity_plus_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:binnacle_connect/main.dart';
 import 'package:binnacle_connect/ui/widgets/connect_startup.dart';
+
+import 'support/fake_media_services.dart';
 
 void main() {
   setUp(() {
@@ -28,6 +32,11 @@ void main() {
     // channel so that read doesn't hit a real (nonexistent, in a test
     // binding) secure storage implementation.
     FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    // ClipRepository's offline upload queue checks real connectivity on
+    // startup — fake the platform so that's a real quick call, not a hang
+    // against a platform channel this test binding never registers.
+    ConnectivityPlatform.instance = FakeConnectivityPlatform();
   });
 
   tearDown(() => ConnectStartup.debugSkipForTesting = false);
@@ -171,16 +180,16 @@ void main() {
     expect(find.byType(CheckboxListTile), findsNothing);
     expect(find.widgetWithText(FilledButton, 'Submit'), findsNothing);
 
-    // Importing real footage submits immediately — no separate consent
-    // re-ask, since that now lives in the account agreement made at
-    // sign-up, not per submission.
+    // "Import from Vision or phone" now opens the real system media picker
+    // (see best_falls_import_test.dart for the full pick -> preview ->
+    // confirm -> submit flow exercised against a fake picker). Here, with
+    // no picker plugin registered in this widget-test host, the platform
+    // channel call resolves with no result — handled as a user cancel,
+    // never a crash and never a fabricated submission.
     await tester.tap(find.text('Import from Vision or phone'));
     await tester.pumpAndSettle();
-
-    // The board shows the rider (from the clip, not a free-typed name) and
-    // ties the entry back to the real clip it came from.
-    expect(find.text('Levi'), findsOneWidget);
-    expect(find.textContaining('Verified capture · Imported fall clip'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Levi'), findsNothing);
   });
 
   testWidgets('Riders aggregates points across King of Wake, Top Tricks, and Best Falls',

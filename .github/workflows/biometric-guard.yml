@@ -1,0 +1,43 @@
+name: biometric-guard
+
+# Hard block for Spotter AI biometric code (owner-approved 2026-09-18).
+# Runs on every pull request into main/production. It passes immediately when
+# no biometric code is touched, and blocks when it is unless a documented legal
+# sign-off exists AND a designated privacy admin (not the PR author) has approved
+# the latest commit. See docs/legal/README.md.
+#
+# After approving a blocked PR, re-run this check so it sees the approval.
+
+on:
+  pull_request:
+    branches: [main, production]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  biometric-guard:
+    name: biometric-guard
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'production'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard unit tests
+        run: python3 -m unittest discover -s tools/biometric_guard -p 'test_*.py'
+
+      - name: Biometric guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 tools/biometric_guard/guard.py
