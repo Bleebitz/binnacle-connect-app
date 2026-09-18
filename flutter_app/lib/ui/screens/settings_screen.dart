@@ -7,6 +7,7 @@ import '../theme/binnacle_theme.dart';
 import '../widgets/binnacle_background.dart';
 import 'pairing_screen.dart';
 import 'device_list_screen.dart';
+import 'connected_services_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -58,6 +59,19 @@ class SettingsScreen extends StatelessWidget {
                     MaterialPageRoute(builder: (_) => const DeviceListScreen()),
                   ),
                 ),
+            ]),
+            const SizedBox(height: 16),
+            _Section(title: 'Connect Live', children: [
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: const Text('Connected Services'),
+                subtitle: const Text('YouTube, Facebook, Twitch, custom RTMP',
+                    style: TextStyle(fontSize: 11)),
+                trailing: const Icon(Icons.chevron_right, size: 18),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ConnectedServicesScreen()),
+                ),
+              ),
             ]),
             const SizedBox(height: 16),
             _Section(title: 'Device', children: [
