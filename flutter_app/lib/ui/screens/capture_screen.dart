@@ -313,12 +313,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
                             // Recorded Demo: local digital zoom of the video,
                             // never a Core command.
                             ? ValueListenableBuilder<double>(
-                                valueListenable: (_mediaSource as DemoRecordedCameraSource).zoom,
+                                valueListenable: _mediaSource.zoom,
                                 builder: (_, zoom, __) => _ZoomColumn(
                                   zoom: zoom,
                                   maxZoom: DemoZoom.max,
-                                  onZoomIn: (_mediaSource as DemoRecordedCameraSource).zoom.zoomIn,
-                                  onZoomOut: (_mediaSource as DemoRecordedCameraSource).zoom.zoomOut,
+                                  onZoomIn: _mediaSource.zoom.zoomIn,
+                                  onZoomOut: _mediaSource.zoom.zoomOut,
                                 ),
                               )
                             // Core Mode: Core-authoritative zoom, unchanged.
