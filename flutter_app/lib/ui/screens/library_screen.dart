@@ -19,6 +19,7 @@ import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
 import '../widgets/media_import_sheet.dart';
+import 'highlight_editor_screen.dart';
 
 /// Clip store. Demo mode is a local, in-memory scaffold ([seedDemo]/
 /// [addFromCapture]). Core mode is backed by a real fetch against the
@@ -345,6 +346,14 @@ class ClipRepository extends ChangeNotifier {
   void add(Clip c) {
     _clips.insert(0, c);
     notifyListeners();
+  }
+
+  /// Adds a Clip produced by the highlight editor (see
+  /// highlight_editor_screen.dart) — persisted like any other
+  /// phone-local clip since it has a real [Clip.localPath].
+  void addEditedClip(Clip c) {
+    add(c);
+    unawaited(_persistImported());
   }
 
   void toggleFavorite(String id) {
@@ -724,10 +733,29 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
     setState(() => _player = controller);
     try {
       await controller.initialize();
+      final edit = clip.editDefinition;
+      if (edit != null) {
+        // Real trim enforcement at playback — see clip.dart's
+        // EditDefinition doc comment for why this isn't a re-encoded
+        // file. A periodic listener stops playback at trimEnd rather
+        // than letting it run into footage the user chose to cut.
+        await controller.seekTo(edit.trimStart);
+        controller.addListener(_stopAtTrimEnd);
+      }
       await controller.play();
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) setState(() => _playerError = 'Could not play this clip: $e');
+    }
+  }
+
+  void _stopAtTrimEnd() {
+    final player = _player;
+    final edit = clip.editDefinition;
+    if (player == null || edit == null) return;
+    if (player.value.position >= edit.trimEnd) {
+      player.pause();
+      player.seekTo(edit.trimStart);
     }
   }
 
@@ -844,6 +872,25 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
               icon: const Icon(Icons.ios_share),
             ),
           ]),
+          // Editing needs a real local video file — never offered for a
+          // photo or a Core/demo clip with no localPath (nothing to open
+          // as a VideoPlayerController.file source).
+          if (_hasLocalVideo) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final edited = await Navigator.of(context).push<Clip>(
+                    MaterialPageRoute(builder: (_) => HighlightEditorScreen(sourceClip: clip)),
+                  );
+                  if (edited != null && context.mounted) Navigator.of(context).pop();
+                },
+                icon: const Icon(Icons.content_cut),
+                label: const Text('Edit highlight'),
+              ),
+            ),
+          ],
         ],
         ),
       ),
