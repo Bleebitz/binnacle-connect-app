@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,8 @@ import 'core/models/vessel_state.dart'; // LinkStatus lives here — used below
 import 'ui/screens/capture_screen.dart';
 import 'ui/screens/community_screen.dart';
 import 'core/services/media_catalog_service.dart';
+import 'core/services/media_import_service.dart';
+import 'core/services/media_upload_service.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/crew_screen.dart';
 import 'core/models/trick_entry.dart';
@@ -131,6 +134,11 @@ class BinnacleConnectApp extends StatelessWidget {
             ClipRepository>(
           create: (_) {
             final clips = ClipRepository();
+            // Phone-imported media is independent of demo/Core mode — a
+            // real local file the user picked, not fetched from anywhere
+            // — so it's restored before/alongside either seed path rather
+            // than gated on AppConfig.isDemo.
+            unawaited(clips.hydrate());
             if (AppConfig.isDemo) clips.seedDemo();
             return clips;
           },
@@ -154,6 +162,15 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),
         ChangeNotifierProvider(create: (_) => FallRepository()),
+
+        // Real system photo/video picker + local copy — see
+        // media_import_service.dart. Registered under the abstract type
+        // for the same reason as EntitlementService above.
+        Provider<MediaImportService>(create: (_) => ImagePickerMediaImportService()),
+        // No cloud upload backend exists yet (BIN-41/BIN-48 both Todo) —
+        // see media_upload_service.dart's module comment for why this
+        // stays NoOp rather than guessing an endpoint.
+        Provider<MediaUploadService>(create: (_) => NoOpMediaUploadService()),
 
         // Connect Live (BIN-38). EntitlementService is the injectable
         // entitlement boundary — StaticEntitlementService always reports

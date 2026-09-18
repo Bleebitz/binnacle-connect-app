@@ -171,16 +171,16 @@ void main() {
     expect(find.byType(CheckboxListTile), findsNothing);
     expect(find.widgetWithText(FilledButton, 'Submit'), findsNothing);
 
-    // Importing real footage submits immediately — no separate consent
-    // re-ask, since that now lives in the account agreement made at
-    // sign-up, not per submission.
+    // "Import from Vision or phone" now opens the real system media picker
+    // (see best_falls_import_test.dart for the full pick -> preview ->
+    // confirm -> submit flow exercised against a fake picker). Here, with
+    // no picker plugin registered in this widget-test host, the platform
+    // channel call resolves with no result — handled as a user cancel,
+    // never a crash and never a fabricated submission.
     await tester.tap(find.text('Import from Vision or phone'));
     await tester.pumpAndSettle();
-
-    // The board shows the rider (from the clip, not a free-typed name) and
-    // ties the entry back to the real clip it came from.
-    expect(find.text('Levi'), findsOneWidget);
-    expect(find.textContaining('Verified capture · Imported fall clip'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Levi'), findsNothing);
   });
 
   testWidgets('Riders aggregates points across King of Wake, Top Tricks, and Best Falls',

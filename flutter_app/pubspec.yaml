@@ -24,6 +24,9 @@ dependencies:
   video_player: ^2.9.2       # Real Library clip playback — see lib/ui/screens/library_screen.dart
   share_plus: ^10.1.2        # Real clip sharing — see lib/ui/screens/library_screen.dart
   url_launcher: ^6.3.1       # Real clip download (opens the Core media URL) — see lib/ui/screens/library_screen.dart
+  image_picker: ^1.1.2       # Real system photo/video picker — see lib/core/services/media_import_service.dart
+  path_provider: ^2.1.5      # App documents directory — imported media is copied here for durable local storage
+  shared_preferences: ^2.3.3 # Local Library-entry metadata persistence across restarts (no cloud backend exists yet)
 
 dev_dependencies:
   flutter_test:

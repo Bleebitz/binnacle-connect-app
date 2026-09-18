@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -5,7 +7,10 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../core/app_config.dart';
 import '../../core/models/clip.dart';
+import '../../core/services/library_local_store.dart';
 import '../../core/services/media_catalog_service.dart';
+import '../../core/services/media_import_service.dart';
+import '../../core/services/media_upload_service.dart';
 import '../../core/services/pairing_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
@@ -18,10 +23,121 @@ import '../widgets/glass_sheet.dart';
 /// endpoint contract.
 class ClipRepository extends ChangeNotifier {
   final List<Clip> _clips = [];
+  final LibraryLocalStore _localStore;
+  final Map<String, StreamSubscription<UploadProgressUpdate>> _uploads = {};
+
+  ClipRepository({LibraryLocalStore? localStore})
+      : _localStore = localStore ?? SharedPreferencesLibraryLocalStore();
+
   List<Clip> get clips => List.unmodifiable(_clips);
 
   bool loading = false;
   String? loadError;
+
+  /// True while a pick/import is in flight — the "Add media" UI disables
+  /// itself on this, so a duplicate tap during a slow picker/copy can't
+  /// start a second concurrent import.
+  bool importing = false;
+
+  /// Restores phone-imported entries persisted from a prior session — see
+  /// library_local_store.dart. Call once at startup (main.dart), before
+  /// any demo seed/Core fetch, so imported media shows up immediately
+  /// rather than only after the next add.
+  Future<void> hydrate() async {
+    final restored = await _localStore.loadImported();
+    if (restored.isEmpty) return;
+    _clips.insertAll(0, restored);
+    notifyListeners();
+  }
+
+  Future<void> _persistImported() async {
+    await _localStore.saveImported(_clips.where((c) => c.localPath != null).toList());
+  }
+
+  /// Real pick -> preview is handled by the caller (UI) via [importer]
+  /// directly, since cancelling a preview must never touch the Library at
+  /// all. This is called only once the user has confirmed. Copies the
+  /// picked file into durable app storage, adds a real Clip in
+  /// [UploadStatus.onPhoneOnly], persists it, and — only if [uploader] is
+  /// available — kicks off a real upload with progress/cancel/retry.
+  /// Throws [MediaImportException] on a real copy failure; never adds a
+  /// broken/partial entry on failure.
+  Future<Clip> importPicked(
+    PickedMedia media, {
+    required MediaImportService importer,
+    required MediaUploadService uploader,
+    String? riderId,
+    ClipKind? kindOverride,
+    String? titleOverride,
+  }) async {
+    final localPath = await importer.copyIntoAppStorage(media);
+    final clip = Clip(
+      id: 'phone-${DateTime.now().microsecondsSinceEpoch}',
+      title: titleOverride ??
+          (media.kind == ImportMediaKind.photo ? 'Photo from phone' : 'Video from phone'),
+      duration: Duration.zero,
+      kind: kindOverride ?? (media.kind == ImportMediaKind.photo ? ClipKind.photo : ClipKind.highlight),
+      riderId: riderId ?? 'me',
+      capturedAt: DateTime.now(),
+      localPath: localPath,
+      uploadStatus: UploadStatus.onPhoneOnly,
+      signed: false,
+      gpsAttached: false,
+    );
+    add(clip);
+    await _persistImported();
+    if (uploader.isAvailable) startUpload(clip.id, uploader);
+    return clip;
+  }
+
+  /// Starts (or retries) a real upload for an already-imported clip.
+  /// Cancelling via [cancelUpload] stops the underlying stream — a real
+  /// unsubscribe, not just a UI-side flag — so no further progress/result
+  /// for that upload is applied after cancellation.
+  void startUpload(String clipId, MediaUploadService uploader) {
+    _uploads[clipId]?.cancel();
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.uploading, uploadProgress: 0);
+    notifyListeners();
+    final localPath = _clips[i].localPath!;
+    _uploads[clipId] = uploader.upload(localPath: localPath, mediaId: clipId).listen((update) {
+      final idx = _clips.indexWhere((c) => c.id == clipId);
+      if (idx == -1) return;
+      if (update.outcome == null) {
+        _clips[idx] = _clips[idx].copyWith(uploadProgress: update.fraction);
+      } else {
+        _clips[idx] = _clips[idx].copyWith(
+          uploadStatus: switch (update.outcome!) {
+            UploadOutcome.uploaded => UploadStatus.uploaded,
+            UploadOutcome.failed || UploadOutcome.unavailable || UploadOutcome.cancelled =>
+              UploadStatus.failed,
+          },
+          uploadProgress: null,
+        );
+        _uploads.remove(clipId);
+        unawaited(_persistImported());
+      }
+      notifyListeners();
+    });
+  }
+
+  void cancelUpload(String clipId) {
+    _uploads.remove(clipId)?.cancel();
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.failed, uploadProgress: null);
+    notifyListeners();
+    unawaited(_persistImported());
+  }
+
+  @override
+  void dispose() {
+    for (final sub in _uploads.values) {
+      sub.cancel();
+    }
+    super.dispose();
+  }
 
   /// True once a real load has been attempted (success or failure) — the
   /// idempotency guard for the trigger in main.dart, so a legitimately
@@ -162,26 +278,6 @@ class ClipRepository extends ChangeNotifier {
     ));
   }
 
-  /// Demo-only stand-in for "pick a fall video off Vision's storage or the
-  /// phone's camera roll" — there's no real device/gallery picker
-  /// integration yet. This is deliberately the ONLY way Best Falls gets new
-  /// footage to submit from (besides picking an existing clip already in
-  /// the Library): real evidence, not a typed name and a self-ticked
-  /// checkbox. Returns the created clip so the caller can submit it
-  /// immediately.
-  Clip importFallClip() {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
-    final clip = Clip(
-      id: 'import-${_seq++}',
-      title: 'Imported fall clip',
-      duration: const Duration(seconds: 11),
-      kind: ClipKind.fall,
-      riderId: 'levi',
-      capturedAt: DateTime.now(),
-    );
-    add(clip);
-    return clip;
-  }
 }
 
 /// A small fixed palette rather than per-clip random colors, so cards read

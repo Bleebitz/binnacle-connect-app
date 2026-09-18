@@ -33,7 +33,10 @@ void main() {
     expect(find.textContaining('Core health unavailable'), findsWidgets);
     expect(() => clips.seedDemo(), throwsStateError);
     expect(() => clips.addFromCapture(kind: ClipKind.photo, preset: 'test'), throwsStateError);
-    expect(() => clips.importFallClip(), throwsStateError);
+    // Real phone media import (importPicked) is intentionally NOT gated by
+    // AppConfig.isDemo — it's the user's own local file, independent of
+    // demo/Core mode — so there's no Core-mode-throws assertion for it here
+    // (see library_screen.dart's ClipRepository.importPicked doc comment).
     await expectLater(context.read<PairingService>().debugSimulatePairing(
         unclaimed: false, role: DeviceRole.owner), throwsStateError);
     await tester.tap(find.text('Live').last);
