@@ -16,6 +16,7 @@ import 'core/services/media_catalog_service.dart';
 import 'core/services/media_import_service.dart';
 import 'core/services/media_upload_service.dart';
 import 'ui/screens/library_screen.dart';
+import 'core/services/video_trim_service.dart';
 import 'ui/screens/crew_screen.dart';
 import 'core/models/trick_entry.dart';
 import 'core/models/fall_entry.dart';
@@ -172,7 +173,10 @@ class BinnacleConnectApp extends StatelessWidget {
             return repo;
           },
         ),
-        ChangeNotifierProvider(create: (_) => CrewRepository()),
+        Provider<VideoTrimService>(create: (_) => PlatformVideoTrimService()),
+        ChangeNotifierProvider(
+          create: (_) => CrewRepository(store: CrewLocalStore())..hydrate(),
+        ),
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),
         ChangeNotifierProvider(create: (_) => FallRepository()),

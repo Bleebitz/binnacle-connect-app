@@ -49,6 +49,7 @@ Widget _harness({
 }
 
 void main() {
+  _persistenceTests();
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
@@ -76,10 +77,10 @@ void main() {
     expect(crew.sessions, isEmpty); // not published yet
 
     await tester.enterText(find.byType(TextField), 'Nice one, Levi');
-    await tester.tap(find.text('Publish'));
+    await tester.tap(find.text('Save to Crew sessions'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Posted to Crew'), findsOneWidget);
+    expect(find.text('Saved to Crew sessions'), findsOneWidget);
     expect(crew.sessions, hasLength(1));
     expect(clips.clips.single.caption, 'Nice one, Levi');
     expect(crew.sessions.first.clipIds, contains(clips.clips.single.id));
@@ -124,9 +125,38 @@ void main() {
     final firstThumb = find.descendant(of: thumbsList, matching: find.byType(GestureDetector)).first;
     await tester.tap(firstThumb);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Publish'));
+    await tester.tap(find.text('Save to Crew sessions'));
     await tester.pumpAndSettle();
 
     expect(crew.sessions.first.clipIds, [existingId]);
+  });
+}
+
+// Truthfulness/persistence of "Post to Crew": the entry is a local session
+// record that survives an app restart, and the UI never says "Posted".
+void _persistenceTests() {
+  test('Crew session entries and riders survive a restart (same phone)', () async {
+    SharedPreferences.setMockInitialValues({});
+    final a = CrewRepository(store: CrewLocalStore());
+    await a.hydrate();
+    a.addRider('Mika');
+    a.postHighlight('clip-1');
+    // notifyListeners saves asynchronously; let it flush.
+    await Future<void>.delayed(Duration.zero);
+
+    final b = CrewRepository(store: CrewLocalStore());
+    await b.hydrate();
+    expect(b.riders.map((r) => r.name), contains('Mika'));
+    expect(b.sessions.single.clipIds, ['clip-1']);
+  });
+
+  test('an unsent draft is persisted and cleared when saved', () async {
+    SharedPreferences.setMockInitialValues({});
+    final a = CrewRepository(store: CrewLocalStore());
+    await a.saveDraft({'clipId': 'c', 'caption': 'hi'});
+    final b = CrewRepository(store: CrewLocalStore());
+    expect((await b.loadDraft())?['caption'], 'hi');
+    await b.saveDraft(null);
+    expect(await b.loadDraft(), isNull);
   });
 }

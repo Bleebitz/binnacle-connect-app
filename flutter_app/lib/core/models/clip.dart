@@ -17,15 +17,11 @@ enum UploadStatus { onPhoneOnly, queued, uploading, paused, uploaded, failed }
 /// highlight_editor_screen.dart). Stored as metadata on a *separate* Clip
 /// (never mutates the source clip) and applied at playback time — trim by
 /// seeking/stopping the real VideoPlayerController at these bounds, crop
-/// by a real Transform/ClipRect sized to [aspect] at render time. This is
-/// NOT a re-encoded standalone video file: doing that for real would mean
-/// either a GPL-licensed FFmpeg build (a real commercial-licensing
-/// problem for a closed-source app) or non-trivial native
-/// MediaMuxer/AVAssetExportSession platform code, neither of which is in
-/// this pass's scope. Stated here, not glossed over: the "edited copy" is
-/// a real, distinct, genuinely trimmed/cropped-at-playback Clip, not yet a
-/// standalone exported file you could upload or share independently of
-/// this app.
+/// by a real Transform/ClipRect sized to [aspect] at render time.
+/// Trim is baked into the edited clip's own exported file (lossless
+/// MediaMuxer trim, see video_trim_service.dart), so its playback trim is
+/// a no-op; crop/framing is NOT baked in (needs a re-encode) and remains
+/// applied at playback only — the exported file is the full-frame trim.
 enum CropAspect { original, portrait, landscape, square }
 
 class EditDefinition {

@@ -1,20 +1,16 @@
 // Community's "Post a highlight" flow: select existing Library media or
-// import new media from the phone, preview it, add a caption, choose an
-// audience, and require an explicit Publish action.
+// import new media from the phone, preview it, add a caption, and save it
+// as a LOCAL Crew session entry.
 //
-// AUDIENCE, stated honestly: "Crew" is the only real destination. There
-// is no external identity/social backend (BIN-46 security/account
-// linking and BIN-40 Binnacle Live viewing are both still Todo) for a
-// broader public/shared audience, so this never fabricates a public feed
-// or a fake successful post to one. Publishing to Crew is itself real and
-// complete: it attaches the clip to CrewRepository's most recent session
-// (see crew_screen.dart's postHighlight), visible immediately in Crew →
-// Sessions — no network call, no simulated success.
+// WHAT THIS ACTUALLY DOES: it attaches the clip to CrewRepository's most
+// recent session, persisted on this phone only (see CrewLocalStore). No
+// other crew member receives it, and no backend enforces an audience —
+// there is no account/membership/storage service (BIN-46, BIN-40 are not
+// built). So the UI says "Save to Crew sessions", never "Posted"/"Shared",
+// and the Public audience stays unavailable.
 //
-// DRAFTS: kept only for the sheet's own lifetime (selected media +
-// caption survive reopening the sheet while the underlying widget tree
-// stays mounted), not persisted across an app restart — a smaller, honest
-// scope rather than claiming full draft persistence that isn't built.
+// DRAFTS: the selected clip and caption are persisted locally until saved
+// or discarded, so they survive closing the sheet and an app restart.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -30,7 +26,7 @@ enum HighlightAudience { crew, public }
 
 extension on HighlightAudience {
   String get label => switch (this) {
-        HighlightAudience.crew => 'Crew',
+        HighlightAudience.crew => 'Crew sessions on this phone (not shared)',
         HighlightAudience.public => 'Public (Binnacle Live)',
       };
   bool get isAvailable => this == HighlightAudience.crew;
@@ -60,31 +56,61 @@ class _PostHighlightSheetState extends State<_PostHighlightSheet> {
   bool _published = false;
 
   @override
+  void initState() {
+    super.initState();
+    _restoreDraft();
+    _captionController.addListener(_persistDraft);
+  }
+
+  Future<void> _restoreDraft() async {
+    final draft = await context.read<CrewRepository>().loadDraft();
+    if (draft == null || !mounted) return;
+    final clips = context.read<ClipRepository>().clips;
+    final match = clips.where((c) => c.id == draft['clipId']);
+    setState(() {
+      if (match.isNotEmpty) _selected = match.first;
+      _captionController.text = draft['caption'] as String? ?? '';
+    });
+  }
+
+  void _persistDraft() {
+    final clip = _selected;
+    context.read<CrewRepository>().saveDraft(
+        clip == null ? null : {'clipId': clip.id, 'caption': _captionController.text});
+  }
+
+  @override
   void dispose() {
+    _captionController.removeListener(_persistDraft);
     _captionController.dispose();
     super.dispose();
   }
 
   Future<void> _importNew() async {
     final clip = await pickAndImportMedia(context, kind: ImportMediaKind.photo);
-    if (clip != null && mounted) setState(() => _selected = clip);
+    if (clip != null && mounted) {
+      setState(() => _selected = clip);
+      _persistDraft();
+    }
   }
 
   Future<void> _importVideo() async {
     final clip = await pickAndImportMedia(context, kind: ImportMediaKind.video);
-    if (clip != null && mounted) setState(() => _selected = clip);
+    if (clip != null && mounted) {
+      setState(() => _selected = clip);
+      _persistDraft();
+    }
   }
 
   Future<void> _publish() async {
     final clip = _selected;
     if (clip == null) return;
     setState(() => _publishing = true);
-    // Deliberately no network/backend call — see module comment. The
-    // brief delay + explicit "Published" state is real UI feedback for a
-    // real local state change (CrewRepository.postHighlight,
-    // ClipRepository's caption), not decoration for a fake network wait.
+    // Local-only state change — see module comment. No network call.
     context.read<ClipRepository>().setCaption(clip.id, _captionController.text.trim());
-    context.read<CrewRepository>().postHighlight(clip.id);
+    context.read<CrewRepository>()
+      ..postHighlight(clip.id)
+      ..saveDraft(null);
     if (!mounted) return;
     setState(() {
       _publishing = false;
@@ -101,10 +127,11 @@ class _PostHighlightSheetState extends State<_PostHighlightSheet> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.check_circle, color: BinnacleColors.tealBright, size: 40),
             const SizedBox(height: 12),
-            const Text('Posted to Crew', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const Text('Saved to Crew sessions', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
             const SizedBox(height: 6),
             const Text(
-              'Visible now in Crew → Sessions.',
+              'Saved on this phone only, in Crew → Sessions. It has not been sent to other '
+              'crew members — sharing needs an account and backend that do not exist yet.',
               style: TextStyle(color: BinnacleColors.slate, fontSize: 12.5),
               textAlign: TextAlign.center,
             ),
@@ -138,7 +165,12 @@ class _PostHighlightSheetState extends State<_PostHighlightSheet> {
                     scrollDirection: Axis.horizontal,
                     itemCount: clips.length,
                     separatorBuilder: (_, __) => const SizedBox(width: 8),
-                    itemBuilder: (_, i) => _LibraryThumb(clip: clips[i], onTap: () => setState(() => _selected = clips[i])),
+                    itemBuilder: (_, i) => _LibraryThumb(
+                        clip: clips[i],
+                        onTap: () {
+                          setState(() => _selected = clips[i]);
+                          _persistDraft();
+                        }),
                   ),
                 ),
               const SizedBox(height: 10),
@@ -167,7 +199,10 @@ class _PostHighlightSheetState extends State<_PostHighlightSheet> {
                   child: Text(_selected!.title,
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: BinnacleColors.offWhite)),
                 ),
-                TextButton(onPressed: () => setState(() => _selected = null), child: const Text('Change')),
+                TextButton(onPressed: () {
+                  setState(() => _selected = null);
+                  _persistDraft();
+                }, child: const Text('Change')),
               ]),
               const SizedBox(height: 12),
               TextField(
@@ -213,7 +248,7 @@ class _PostHighlightSheetState extends State<_PostHighlightSheet> {
                   onPressed: _publishing ? null : _publish,
                   child: _publishing
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Publish'),
+                      : const Text('Save to Crew sessions'),
                 ),
               ),
             ],

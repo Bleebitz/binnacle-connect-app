@@ -234,13 +234,10 @@ class _SetupPanel extends StatelessWidget {
             onTap: () => onToggle(custom),
           ),
         // Not a DestinationKind — permanently disabled, informational only.
-        // Meta doesn't offer a general third-party RTMP-push API into
-        // Instagram Live (see connected_services_screen.dart for the full
-        // explanation); showing it disabled here means the destination
-        // step also explains the gap instead of silently omitting it.
+        // See connected_services_screen.dart for the documented limitation.
         const _UnsupportedDestinationTile(
           label: 'Instagram',
-          reason: 'Not supported — no general RTMP-push API for Instagram Live',
+          reason: 'Instagram streaming is not supported by this implementation',
         ),
         TextButton.icon(
           onPressed: onAddCustomRtmp,

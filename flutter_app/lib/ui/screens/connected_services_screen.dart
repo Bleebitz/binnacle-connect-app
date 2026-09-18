@@ -44,16 +44,13 @@ class ConnectedServicesScreen extends StatelessWidget {
                   ),
                 ),
               ),
-            // Instagram is deliberately absent from the selectable
-            // destination list, not merely unconnected — Meta does not
-            // offer a general-purpose third-party RTMP-push API into
-            // Instagram Live (unlike Facebook Live's Graph API, which
-            // does). Instagram Live ingest is limited to Meta's own
-            // first-party broadcaster tools / the invite-only Live
-            // Producer program, which requires separate Meta approval
-            // per account and is not a workflow this app can request or
-            // grant on a user's behalf. Shown here, disabled, so this is
-            // an explained limitation rather than a silent omission.
+            // Instagram streaming is not supported by this implementation.
+            // Meta's Instagram Live Producer (about.instagram.com, "limited
+            // access", instagram.com only) issues a per-session URL + stream
+            // key for a Custom RTMP encoder, and Meta's Instagram Platform
+            // publishing docs list images/videos/reels/carousels/stories with
+            // no live-video publishing. Nothing here integrates with either,
+            // so nothing is promised. Shown disabled to explain the gap.
             Material(
               type: MaterialType.transparency,
               child: ListTile(

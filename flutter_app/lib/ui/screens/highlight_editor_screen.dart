@@ -2,17 +2,11 @@
 // crop/framing aspect with an adjustable offset, preview, and save as a
 // separate edited copy.
 //
-// WHAT "SAVE" ACTUALLY PRODUCES, stated plainly: a new, distinct Clip
-// that shares the *same* underlying video file as the source (never
-// mutates or deletes the original) plus an [EditDefinition] — trim/crop/
-// cover-frame parameters applied for real at playback (seek-to-start,
-// stop-at-end, a real Transform/ClipRect sized to the chosen aspect),
-// not a separately re-encoded video file. Real re-encoding would need
-// either a GPL-licensed FFmpeg build (a real commercial-licensing
-// problem for this closed-source app) or non-trivial native
-// MediaMuxer/AVAssetExportSession platform work — both out of scope for
-// this first version. See clip.dart's EditDefinition doc comment for the
-// same statement in the data model itself.
+// WHAT "SAVE" PRODUCES: a new Clip backed by its OWN exported mp4
+// (lossless trim via Android MediaExtractor/MediaMuxer — see
+// video_trim_service.dart), never touching the source. Crop/framing is
+// stored as an EditDefinition and applied at playback; it is not baked
+// into the file (that would need a re-encode).
 //
 // The cover frame IS a real, separately-extracted JPEG (via
 // video_thumbnail — a real platform thumbnail API, not GPL/FFmpeg), used
@@ -21,11 +15,13 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 
 import '../../core/models/clip.dart';
+import '../../core/services/video_trim_service.dart';
 import '../theme/binnacle_theme.dart';
 import 'library_screen.dart' show ClipRepository;
 
@@ -68,6 +64,7 @@ class _HighlightEditorScreenState extends State<HighlightEditorScreen> {
   bool _exporting = false;
   String? _exportError;
   bool _cancelExport = false;
+  double _progress = 0;
 
   @override
   void initState() {
@@ -113,17 +110,22 @@ class _HighlightEditorScreenState extends State<HighlightEditorScreen> {
     final player = _player;
     final path = widget.sourceClip.localPath;
     if (player == null || path == null) return;
+    final trimmer = context.read<VideoTrimService>();
+    if (!trimmer.isAvailable) {
+      setState(() => _exportError = 'Exporting an edited copy is not available on this platform.');
+      return;
+    }
     setState(() {
       _exporting = true;
       _exportError = null;
       _cancelExport = false;
+      _progress = 0;
     });
 
+    final id = 'edit-${DateTime.now().microsecondsSinceEpoch}';
     String? coverPath;
     try {
-      // Real frame extraction (not a re-encode) — video_thumbnail calls
-      // the platform's own thumbnail API (MediaMetadataRetriever on
-      // Android, AVAssetImageGenerator on iOS), no GPL dependency.
+      // Real frame extraction from the source (platform thumbnail API).
       coverPath = await vt.VideoThumbnail.thumbnailFile(
         video: path,
         timeMs: _coverFrameAt.inMilliseconds,
@@ -140,60 +142,83 @@ class _HighlightEditorScreenState extends State<HighlightEditorScreen> {
       return;
     }
 
-    if (_cancelExport) {
-      setState(() => _exporting = false);
+    final start = _trimStart;
+    final end = _trimEnd;
+    final docs = await getApplicationDocumentsDirectory();
+    final output = '${docs.path}/edits/$id.mp4';
+    bool exported;
+    try {
+      exported = await trimmer.trim(
+        source: path,
+        output: output,
+        start: start,
+        end: end,
+        onProgress: (p) {
+          if (mounted) setState(() => _progress = p);
+        },
+      );
+    } on TrimException catch (e) {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+          _exportError = switch (e.reason) {
+            TrimFailure.insufficientSpace => 'Not enough free storage to save an edited copy. Free up space and try again. Your original is unchanged.',
+            TrimFailure.missingSource => 'The source video file is missing, so it cannot be edited.',
+            TrimFailure.unsupported => 'This video format cannot be exported by the built-in trimmer.',
+            _ => 'Export failed: ${e.message}. Your original is unchanged.',
+          };
+        });
+      }
+      return;
+    }
+    if (!exported || _cancelExport) {
+      // Native side already removed any partial file.
+      if (mounted) setState(() => _exporting = false);
       return;
     }
 
-    final sourceAspect = player.value.aspectRatio;
+    final outFile = File(output);
+    if (!outFile.existsSync()) {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+          _exportError = 'Export finished but the file was not found. Your original is unchanged.';
+        });
+      }
+      return;
+    }
+
+    final exportedDuration = end - start;
+    final coverInCopy = _coverFrameAt - start;
     final edited = Clip(
-      id: 'edit-${DateTime.now().microsecondsSinceEpoch}',
+      id: id,
       title: '${widget.sourceClip.title} (edited)',
-      duration: _trimEnd - _trimStart,
+      duration: exportedDuration,
       thumbnailPath: coverPath,
       kind: widget.sourceClip.kind,
       riderId: widget.sourceClip.riderId,
       capturedAt: widget.sourceClip.capturedAt,
-      localPath: path, // same file — see module comment
+      localPath: output, // its OWN file; the source is untouched
       uploadStatus: UploadStatus.onPhoneOnly,
       signed: false,
       gpsAttached: false,
-      sizeBytes: widget.sourceClip.sizeBytes,
-    );
-    final editedWithDefinition = _attachEditDefinition(edited, sourceAspect);
-
-    if (!mounted) return;
-    context.read<ClipRepository>().addEditedClip(editedWithDefinition);
-    setState(() => _exporting = false);
-    Navigator.of(context).pop(editedWithDefinition);
-  }
-
-  Clip _attachEditDefinition(Clip base, double sourceAspect) {
-    // Clip has no public copyWith for editDefinition (it's set once at
-    // construction, immutable after) — build the final Clip directly.
-    return Clip(
-      id: base.id,
-      title: base.title,
-      duration: base.duration,
-      thumbnailPath: base.thumbnailPath,
-      kind: base.kind,
-      riderId: base.riderId,
-      capturedAt: base.capturedAt,
-      localPath: base.localPath,
-      uploadStatus: base.uploadStatus,
-      signed: base.signed,
-      gpsAttached: base.gpsAttached,
-      sizeBytes: base.sizeBytes,
+      sizeBytes: outFile.lengthSync(),
       editDefinition: EditDefinition(
         sourceClipId: widget.sourceClip.id,
-        trimStart: _trimStart,
-        trimEnd: _trimEnd,
+        // Trim is baked into the exported file, so playback trim is a no-op.
+        trimStart: Duration.zero,
+        trimEnd: exportedDuration,
         aspect: _aspect,
         cropOffsetX: _cropOffsetX,
         cropOffsetY: _cropOffsetY,
-        coverFrameAt: _coverFrameAt,
+        coverFrameAt: coverInCopy.isNegative ? Duration.zero : coverInCopy,
       ),
     );
+
+    if (!mounted) return;
+    context.read<ClipRepository>().addEditedClip(edited);
+    setState(() => _exporting = false);
+    Navigator.of(context).pop(edited);
   }
 
   @override
@@ -309,8 +334,9 @@ class _HighlightEditorScreenState extends State<HighlightEditorScreen> {
         ],
         const SizedBox(height: 8),
         const Text(
-          'Trim and framing are preserved originals, applied at playback — not yet a '
-          'separately re-encoded video file.',
+          'Saving creates a separate trimmed video file (cut at the nearest keyframe, audio and '
+          'orientation kept); your original is never changed. Framing/crop is applied when this '
+          'copy plays in Binnacle Connect — it is not baked into the file.',
           style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11, height: 1.4),
         ),
         if (_exportError != null)
@@ -321,12 +347,18 @@ class _HighlightEditorScreenState extends State<HighlightEditorScreen> {
         const SizedBox(height: 16),
         if (_exporting)
           Row(children: [
-            const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(value: _progress > 0 ? _progress : null, strokeWidth: 2)),
             const SizedBox(width: 12),
-            const Text('Saving…'),
+            Text('Saving… ${(_progress * 100).round()}%'),
             const Spacer(),
             TextButton(
-              onPressed: () => setState(() => _cancelExport = true),
+              onPressed: () {
+                setState(() => _cancelExport = true);
+                context.read<VideoTrimService>().cancel();
+              },
               child: const Text('Cancel'),
             ),
           ])

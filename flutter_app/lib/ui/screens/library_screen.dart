@@ -368,9 +368,15 @@ class ClipRepository extends ChangeNotifier {
     final path = _clips[i].localPath;
     if (path == null) return; // nothing local to delete
     _uploads.remove(clipId)?.cancel();
-    final file = File(path);
-    if (file.existsSync()) file.deleteSync();
     _clips.removeAt(i);
+    // Only remove the file when no other Library entry still uses it (an
+    // edited clip made before exports had their own file shares its
+    // source's file — deleting that must not destroy the source's copy).
+    final stillReferenced = _clips.any((c) => c.localPath == path);
+    if (!stillReferenced) {
+      final file = File(path);
+      if (file.existsSync()) file.deleteSync();
+    }
     _lastFailureReason.remove(clipId);
     _lastFailureMessage.remove(clipId);
     notifyListeners();

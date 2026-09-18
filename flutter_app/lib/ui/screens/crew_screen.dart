@@ -1,10 +1,115 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../core/models/rider.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/solid_panel.dart';
 
+/// On-device persistence for [CrewRepository]. Local only — this is the
+/// phone's own record, not a shared/synced Crew (no such backend exists).
+class CrewLocalStore {
+  static const _key = 'crew_local_v1';
+  static const _draftKey = 'crew_post_draft_v1';
+
+  Future<Map<String, dynamic>?> load() async {
+    final raw = (await SharedPreferences.getInstance()).getString(_key);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> save(Map<String, dynamic> json) async =>
+      (await SharedPreferences.getInstance()).setString(_key, jsonEncode(json));
+
+  /// Unsent "Post a highlight" draft: {clipId, caption}.
+  Future<Map<String, dynamic>?> loadDraft() async {
+    final raw = (await SharedPreferences.getInstance()).getString(_draftKey);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveDraft(Map<String, dynamic>? draft) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (draft == null) {
+      await prefs.remove(_draftKey);
+    } else {
+      await prefs.setString(_draftKey, jsonEncode(draft));
+    }
+  }
+}
+
 class CrewRepository extends ChangeNotifier {
+  CrewRepository({CrewLocalStore? store}) : _store = store;
+
+  final CrewLocalStore? _store;
+
+  /// Restores riders and session entries saved on this phone. No-op when
+  /// constructed without a store (tests, previews).
+  Future<void> hydrate() async {
+    final json = await _store?.load();
+    if (json == null) return;
+    final riders = (json['riders'] as List? ?? [])
+        .whereType<Map>()
+        .map((r) => Rider(
+            id: r['id'] as String,
+            name: r['name'] as String,
+            biometricConsent: r['biometricConsent'] as bool? ?? false))
+        .toList();
+    final sessions = (json['sessions'] as List? ?? []).whereType<Map>().map((s) => CrewSession(
+          id: s['id'] as String,
+          label: s['label'] as String,
+          location: s['location'] as String? ?? '',
+          riderIds: List<String>.from(s['riderIds'] as List? ?? []),
+          clipIds: List<String>.from(s['clipIds'] as List? ?? []),
+          reactions: Map<String, int>.from(s['reactions'] as Map? ?? {}),
+        ));
+    if (riders.isNotEmpty) {
+      _riders
+        ..clear()
+        ..addAll(riders);
+    }
+    _sessions
+      ..clear()
+      ..addAll(sessions);
+    notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    final store = _store;
+    if (store == null) return;
+    store.save({
+      'riders': [
+        for (final r in _riders) {'id': r.id, 'name': r.name, 'biometricConsent': r.biometricConsent}
+      ],
+      'sessions': [
+        for (final s in _sessions)
+          {
+            'id': s.id,
+            'label': s.label,
+            'location': s.location,
+            'riderIds': s.riderIds,
+            'clipIds': s.clipIds,
+            'reactions': s.reactions,
+          }
+      ],
+    });
+  }
+
+  Future<Map<String, dynamic>?> loadDraft() async => _store?.loadDraft();
+  Future<void> saveDraft(Map<String, dynamic>? draft) async => _store?.saveDraft(draft);
+
   final List<Rider> _riders = [const Rider(id: 'r0', name: 'You')];
   final List<CrewSession> _sessions = [];
 
@@ -21,12 +126,11 @@ class CrewRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Real "publish" destination for Community's Post a highlight flow —
-  /// there is no external identity/social backend (BIN-46/BIN-40 are both
-  /// Todo), so "publish to Crew" is the only genuine audience today: it
-  /// attaches [clipId] to the most recent session (creating one first if
-  /// none exists yet), visible to this Crew immediately, with no network
-  /// call and no fabricated "posted publicly" state.
+  /// Saves [clipId] as an entry in the most recent local session (creating
+  /// one first if none exists). This is a LOCAL session entry, persisted on
+  /// this phone only: no other crew member receives it, and no backend
+  /// enforces an audience (BIN-46/BIN-40 are not built). Never describe it
+  /// as posted/shared.
   void postHighlight(String clipId) {
     if (_sessions.isEmpty) {
       _sessions.insert(
@@ -171,7 +275,7 @@ class _SessionsTab extends StatelessWidget {
                         size: 13, color: BinnacleColors.tealBright),
                     const SizedBox(width: 4),
                     Text(
-                      '${s.clipIds.length} highlight${s.clipIds.length == 1 ? '' : 's'} posted',
+                      '${s.clipIds.length} highlight${s.clipIds.length == 1 ? '' : 's'} saved on this phone',
                       style: BinnacleTheme.mono(size: 11.5, color: BinnacleColors.tealBright),
                     ),
                   ]),

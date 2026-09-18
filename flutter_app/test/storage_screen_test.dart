@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:binnacle_connect/core/models/clip.dart';
 import 'package:binnacle_connect/core/services/media_import_service.dart';
 import 'package:binnacle_connect/core/services/media_upload_service.dart';
 import 'package:binnacle_connect/ui/screens/library_screen.dart';
@@ -36,6 +37,28 @@ void main() {
 
     expect(repo.clips, isEmpty);
     expect(File(clip.localPath!).existsSync(), isFalse);
+  });
+
+  test('deleting an entry that shares a file with another entry keeps the file', () async {
+    final repo = ClipRepository(connectivity: FakeConnectivityChecker(), uploader: NoOpMediaUploadService());
+    await repo.hydrate();
+    final src = await repo.importPicked(
+      const PickedMedia(kind: ImportMediaKind.video, sourcePath: '/x', fileName: 'a.mp4', sizeBytes: 10),
+      importer: FakeMediaImportService(),
+    );
+    repo.addEditedClip(Clip(
+      id: 'edit-legacy',
+      title: 'legacy edit',
+      duration: const Duration(seconds: 1),
+      kind: ClipKind.highlight,
+      riderId: 'r0',
+      capturedAt: DateTime(2026),
+      uploadStatus: UploadStatus.onPhoneOnly,
+      localPath: src.localPath, // pre-export edits shared the source file
+    ));
+    repo.deleteLocalCopy('edit-legacy');
+    expect(File(src.localPath!).existsSync(), isTrue, reason: 'the source clip still uses this file');
+    expect(repo.clips.map((c) => c.id), [src.id]);
   });
 
   testWidgets('Storage screen shows a confirmation before deleting, and cancelling keeps the media',
