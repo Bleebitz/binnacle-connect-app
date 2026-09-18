@@ -356,6 +356,26 @@ class ClipRepository extends ChangeNotifier {
     unawaited(_persistImported());
   }
 
+  /// Deletes only the local file + local-library entry for a
+  /// phone-imported clip — see storage_screen.dart. Distinct from any
+  /// future "delete from cloud" action: this never touches a remote
+  /// object (there is no cloud backend to touch), and never runs on a
+  /// Core/demo-seeded clip (no localPath, nothing local to remove).
+  void deleteLocalCopy(String clipId) {
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    final path = _clips[i].localPath;
+    if (path == null) return; // nothing local to delete
+    _uploads.remove(clipId)?.cancel();
+    final file = File(path);
+    if (file.existsSync()) file.deleteSync();
+    _clips.removeAt(i);
+    _lastFailureReason.remove(clipId);
+    _lastFailureMessage.remove(clipId);
+    notifyListeners();
+    unawaited(_persistImported());
+  }
+
   void toggleFavorite(String id) {
     final i = _clips.indexWhere((c) => c.id == id);
     if (i == -1) return;

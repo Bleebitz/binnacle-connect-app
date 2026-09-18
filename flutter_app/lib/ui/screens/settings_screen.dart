@@ -10,6 +10,7 @@ import 'library_screen.dart' show ClipRepository;
 import 'pairing_screen.dart';
 import 'device_list_screen.dart';
 import 'connected_services_screen.dart';
+import 'storage_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -73,6 +74,19 @@ class SettingsScreen extends StatelessWidget {
                 trailing: const Icon(Icons.chevron_right, size: 18),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const ConnectedServicesScreen()),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            _Section(title: 'Storage', children: [
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: const Text('Manage storage'),
+                subtitle: const Text('Local media, upload status, and remote confirmation',
+                    style: TextStyle(fontSize: 11)),
+                trailing: const Icon(Icons.chevron_right, size: 18),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const StorageScreen()),
                 ),
               ),
             ]),
