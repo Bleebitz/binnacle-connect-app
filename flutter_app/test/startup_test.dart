@@ -130,6 +130,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('logo scale never leaves [0.94, 1.0] during the entrance (scale clamp)',
+      (tester) async {
+    await tester.pumpWidget(app(() => Completer<void>().future));
+    await loadBranding(tester);
+    final scaleFinder = find.byKey(const ValueKey('connect-startup-logo-scale'));
+
+    // Sample the scale across the whole entrance in small steps — this
+    // must hold at every intermediate frame, not just start/end, since an
+    // overshooting curve could briefly exceed 1.0 without either endpoint
+    // ever showing it.
+    for (var elapsedMs = 0; elapsedMs <= 1400; elapsedMs += 50) {
+      final scale = tester.widget<ScaleTransition>(scaleFinder).scale.value;
+      expect(scale, greaterThanOrEqualTo(0.94),
+          reason: 'at t=${elapsedMs}ms');
+      expect(scale, lessThanOrEqualTo(1.0), reason: 'at t=${elapsedMs}ms');
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    // And it must actually have reached full scale by rest, not stalled
+    // short of it.
+    expect(tester.widget<ScaleTransition>(scaleFinder).scale.value, 1.0);
+  });
+
   testWidgets('reduced motion preserves the minimum floor but skips the animation',
       (tester) async {
     tester.platformDispatcher.accessibilityFeaturesTestValue =
@@ -203,6 +225,14 @@ void main() {
       await loadBranding(tester);
       await tester.pump(const Duration(milliseconds: 1200));
       expect(tester.takeException(), isNull);
+
+      // Landscape lays the logo/wordmark out side-by-side (Row); portrait
+      // stacks them (Column) — verify the actual layout swapped, not just
+      // that nothing overflowed.
+      final isLandscape = size.width > size.height;
+      final flex = tester.widget<Flex>(find.byType(Flex));
+      expect(flex.direction,
+          isLandscape ? Axis.horizontal : Axis.vertical);
 
       if (const bool.fromEnvironment('SPLASH_EVIDENCE')) {
         final boundary =

@@ -64,7 +64,7 @@ class _ConnectStartupState extends State<ConnectStartup>
     parent: _entrance,
     curve: const Interval(0.0, 0.55, curve: Curves.easeOut),
   );
-  late final Animation<double> _logoScale = Tween<double>(begin: 0.88, end: 1.0)
+  late final Animation<double> _logoScale = Tween<double>(begin: 0.94, end: 1.0)
       .animate(CurvedAnimation(
     parent: _entrance,
     curve: const Interval(0.0, 0.65, curve: Curves.easeOutCubic),
@@ -255,42 +255,64 @@ class _SplashVisual extends StatelessWidget {
         body: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              // Landscape swaps the logo/wordmark from stacked (Column) to
+              // side-by-side (Row) — on a short landscape viewport a
+              // stacked layout wastes the abundant width and starves the
+              // scarce height, exactly where clipping/overflow would show
+              // up first.
+              final isLandscape = constraints.maxWidth > constraints.maxHeight;
               // Responsive, not fixed: bounded by both available width and
               // height so the (now much larger) mark neither clips on a
               // small/narrow phone nor overruns a short landscape viewport.
+              // Landscape additionally reserves width for the side-by-side
+              // wordmark, so the logo itself gets a smaller share of width.
               final logoWidth = math.min(
                 300.0,
                 math.min(
-                  constraints.maxWidth * 0.68,
+                  constraints.maxWidth * (isLandscape ? 0.34 : 0.68),
                   constraints.maxHeight * 0.34,
                 ),
               );
+              final logo = assetsReady
+                  ? FadeTransition(
+                      opacity: logoFade,
+                      child: ScaleTransition(
+                        key: const ValueKey('connect-startup-logo-scale'),
+                        scale: logoScale,
+                        child: _GlowingLogo(width: logoWidth),
+                      ),
+                    )
+                  : const SizedBox.shrink();
+              final wordmark = assetsReady
+                  ? FadeTransition(
+                      opacity: wordmarkFade,
+                      child: Text(
+                        'CONNECT',
+                        style: _splashMono(
+                          size: 13,
+                          color: BinnacleColors.tealBright,
+                          weight: FontWeight.w600,
+                        ).copyWith(letterSpacing: 7),
+                      ),
+                    )
+                  : const SizedBox.shrink();
               return Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (assetsReady)
-                      FadeTransition(
-                        opacity: logoFade,
-                        child: ScaleTransition(
-                          key: const ValueKey('connect-startup-logo-scale'),
-                          scale: logoScale,
-                          child: _GlowingLogo(width: logoWidth),
+                    Flex(
+                      direction: isLandscape ? Axis.horizontal : Axis.vertical,
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        logo,
+                        SizedBox(
+                          width: isLandscape ? 20 : 0,
+                          height: isLandscape ? 0 : 22,
                         ),
-                      ),
-                    const SizedBox(height: 22),
-                    if (assetsReady)
-                      FadeTransition(
-                        opacity: wordmarkFade,
-                        child: Text(
-                          'CONNECT',
-                          style: _splashMono(
-                            size: 13,
-                            color: BinnacleColors.tealBright,
-                            weight: FontWeight.w600,
-                          ).copyWith(letterSpacing: 7),
-                        ),
-                      ),
+                        wordmark,
+                      ],
+                    ),
                     if (failed) ...[
                       const SizedBox(height: 24),
                       Padding(
