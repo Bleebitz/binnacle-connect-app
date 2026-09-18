@@ -11,13 +11,19 @@ sections.**
 
 ---
 
+**Revision 2 (2026-09-18):** fan-out spike scoped
+(`BIN-39_FANOUT_SPIKE.md`); stream-key rotation approved; transcoding to be
+spiked; Binnacle Archive / Deep Archive dropped from scope.
+
+---
+
 ## 1. What changes
 
 | v0.1 says | Amendment A1 says |
 |---|---|
 | 4.4 / decision 17 / 26.13: **Cloudflare Stream** is the preferred live ingest, playback and fan-out candidate | **AWS IVS** is the live ingest and Binnacle Live playback provider |
 | 26.1-26.13: **AWS S3** (durable media), **CloudFront** (Library delivery), **MediaConvert** (standard transcoding) | **Cloudflare R2** is the durable media store. Delivery and standard transcoding are **not yet decided** (section 3, gaps 5-6) |
-| 26.4-26.5: S3 Lifecycle, Intelligent-Tiering, Glacier / **Deep Archive** for Binnacle Archive | R2 lifecycle rules (Standard to Infrequent Access, expiry). **Deep-archive tier does not exist on R2** (gap 7) |
+| 26.4-26.5: S3 Lifecycle, Intelligent-Tiering, Glacier / **Deep Archive** for Binnacle Archive | **Dropped from scope (owner, 2026-09-18).** Creator+ users get 1-year retention on standard R2; anyone wanting permanent archival downloads their MP4s. No Deep Archive, no Infrequent Access tiering in the current scope |
 | Identity (sections 14, 16) unspecified | **Supabase Auth** (Postgres-backed) plus a small Binnacle token service (see `docs/evidence/CORE_USER_ACCOUNT_API_PROPOSAL.md`) |
 
 **Unchanged:** the product principle (Live, Cloud, Create); one boat uplink
@@ -58,13 +64,13 @@ Checked, with what it means for the plan:
 
 | # | Gap | Why it matters | Options to evaluate | Proving test |
 |---|---|---|---|---|
-| 1 | **External fan-out.** IVS has no documented native restream | v0.1 acceptance: one boat uplink reaches Binnacle Live *and* external destinations; free/paid destination counts | (a) Binnacle-run restreamer (SRT in from Vision, RTMPS out to IVS and to external platforms); (b) a managed component such as AWS Elemental MediaLive fed from IVS; (c) keep Cloudflare Stream only for external simulcast; (d) third-party multistream service. Sending N uplinks from the boat is excluded by principle 4.1 | One real Vision stream reaches IVS and one external destination with a single boat uplink; per-destination state stays independent |
+| 1 | **External fan-out.** IVS has no documented native restream | v0.1 acceptance: one boat uplink reaches Binnacle Live *and* external destinations | **Spike defined** (`BIN-39_FANOUT_SPIKE.md`) under the owner's strict constraint of a single SRT uplink from the Vision unit: compare AWS Elemental MediaLive with a managed third-party API (Restream.io named); if both bring unacceptable margin or latency, evaluate Cloudflare Stream strictly as the external simulcast engine. Desk research (official pricing): Cloudflare simulcast is about $0.06 per output-hour; AWS's own MediaLive example is $2.37-$3.94 per hour; Restream's SRT ingest needs the $239/month Business plan per account | One real stream reaches IVS and one external destination through a single boat uplink; per-destination state independent; measured cost per live hour |
 | 2 | **Uplink degradation.** Multitrack does not do what the rationale assumes | The stated reason for choosing IVS | Vision encoder adaptive bitrate over SRT (provider-independent); multitrack with a low-rate lowest track as a bonus; measure both | Throttle the uplink 5 Mbps to 500 kbps to 5 Mbps: the stream never drops, the viewer sees lower quality, recovery time recorded |
-| 3 | **Ingest authorization** | BIN-46 requires scoped/expiring ingest | Per-session channel or key rotation with deletion at session end; evaluate IVS Real-Time expiring tokens | A leaked stream key from an ended session is rejected; a key is never present on the phone |
+| 3 | **Ingest authorization** | BIN-46 requires scoped/expiring ingest | **Approved (owner, 2026-09-18):** rotate the IVS stream key per session and destroy it at session shutdown. IVS Real-Time expiring tokens remain an evaluation item | A key from an ended session is rejected; no key ever reaches a phone |
 | 4 | **Private/shared/public playback** on IVS | BIN-40 privacy modes | Evaluate IVS private channels with playback authorization tokens (verify current capabilities) | A viewer without a valid token cannot play; an expired token stops playing |
 | 5 | **Live archive location.** IVS recording is written to AWS S3 as far as I know (verify) | Recordings would land on S3, not R2, reintroducing an AWS bucket | A staging S3 bucket, then a one-time copy to R2 (S3 egress charged once per recording, not per view); cost it in BIN-43 | A recorded session appears in R2 with a matching checksum; staging object expires |
-| 6 | **Standard transcoding and delivery.** MediaConvert works on S3 (verify inputs/outputs); CloudFront was the delivery layer | Proxy/compatibility derivatives and authorized playback need a new path | Delivery: R2 presigned URLs or a Worker that verifies the Binnacle token and the rider's pointer. Transcoding: MediaConvert with S3 staging (costed), or Binnacle compute workers running FFmpeg, or another managed transcoder | A 4K source yields a playable 1080p proxy in R2; an unauthorized request is refused |
-| 7 | **Binnacle Archive.** R2 has Standard and Infrequent Access only | v0.1 26.4-26.5 assumed Glacier/Deep Archive at about $1/TB-month | Re-scope Archive to R2 Infrequent Access ($0.01/GB-month), or copy cold media to an AWS Glacier class with retrieval costs | Cost per archived TB-year modelled for both; restore time/cost measured before any commercial Archive offer |
+| 6 | **Standard transcoding and delivery.** MediaConvert and CloudFront are out | HLS playlists and proxies for R2 playback | **Dedicated spike (owner, 2026-09-18):** generate HLS from R2 sources with a lightweight managed transcoder or FFmpeg. **Correction to the brief:** Cloudflare *Workers* cannot run FFmpeg (128 MB memory, tight CPU limits, and `ffmpeg.wasm` cannot be compiled at runtime), so the FFmpeg option means **Cloudflare Containers** (a Docker image with native FFmpeg, orchestrated from a Worker) or an equivalent. Candidates: Containers + FFmpeg; Cloudflare Stream used as a VOD transcoder (extra storage and per-minute cost); another managed transcoder. Delivery: R2 presigned URLs or a Worker that checks the Binnacle token and the rider's pointer | A 4K source yields a playable HLS ladder in R2; an unauthorized request is refused; cost per hour of source and cold-start time recorded |
+| 7 | **Binnacle Archive** | Deep Archive was in v0.1 26.4-26.5 | **Resolved by scope cut (owner, 2026-09-18).** Not built. Creator+ retention is 1 year on standard R2; permanent archival is the user's own download of MP4s. Revisit only with a new decision | n/a; retention expiry behaves as configured |
 | 8 | **Three vendors** (Cloudflare, AWS, Supabase) | Operations, security review, billing, incident response | Document ownership, credentials and on-call for each; single secrets policy | Runbook and access review |
 
 ## 5. Effects on other issues
@@ -74,8 +80,8 @@ Checked, with what it means for the plan:
 - **BIN-48** (storage): validation target becomes Cloudflare R2. Rewrite exit
   criteria 1-9 for R2 (private bucket, checksum, presigned access,
   unauthorized access blocked, lifecycle rules, asset-class separation,
-  Infrequent Access restore behavior, costs including operation fees) and add
-  the delivery/transcoding decision (gap 6) and the archive re-scope (gap 7).
+  1-year expiry behavior on standard R2, costs including operation fees) and add
+  the transcoding/HLS spike (gap 6). Archive (gap 7) is out of scope.
 - **BIN-41:** unchanged behavior; storage and lifecycle references move to R2.
   Media is stored once and shared through per-rider pointers, so object keys
   are per asset, not per user.
@@ -94,6 +100,10 @@ Checked, with what it means for the plan:
 | 2026-09-18 | Durable media on Cloudflare R2 (replaces S3 direction) | Owner |
 | 2026-09-18 | Live ingest and Binnacle Live playback on AWS IVS (replaces Cloudflare Stream direction) | Owner |
 | 2026-09-18 | Identity provider: Supabase Auth, plus a Binnacle token service for the 14-day offline token | Owner |
+| 2026-09-18 | Fan-out spike authorised under a single-SRT-uplink constraint: MediaLive vs managed third party, Cloudflare Stream as simulcast-only fallback | Owner |
+| 2026-09-18 | IVS stream key rotated per session and destroyed at shutdown | Owner |
+| 2026-09-18 | Transcoding/HLS spike for R2 playback (Containers + FFmpeg or a managed transcoder) | Owner |
+| 2026-09-18 | Binnacle Archive / Deep Archive dropped; Creator+ = 1 year on standard R2 | Owner |
 
 v0.1's own rule for this kind of change (section 23) applied: provider
 selection was an open implementation parameter. Because this reverses the
