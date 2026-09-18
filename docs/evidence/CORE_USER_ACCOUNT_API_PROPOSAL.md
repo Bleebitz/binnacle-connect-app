@@ -23,6 +23,13 @@ service (5.0), co-owned media via deduplicated pointers (2.2-2.3), tier
 governance and trials (2.4), ownership disputes and stolen units (7.3), age
 gates (8). Open items are in section 11.2.
 
+**Revision v2.3 (2026-09-18):** records the second round of owner decisions:
+Supabase Auth; the cloud pivot to Cloudflare R2 (storage) and AWS IVS (live)
+per `docs/architecture/CONNECT_CLOUD_ARCHITECTURE_AMENDMENT_A1.md`; unit-owner
+pointers; the Takedown Request flow (2.5); per-ride Spotter opt-in (8.4); the
+Support-only override for stolen-unit blocks (7.3); age policy (8.7); default
+join policy, claim-code lifetime and evidence retention.
+
 **Related issues:** BIN-46 (security/account linking/authorization), BIN-40
 (Binnacle Live privacy/viewing), BIN-41 (cloud media/Library), BIN-48
 (S3/CloudFront), BIN-43 (subscriptions/entitlements), BIN-39 (live uplink).
@@ -104,6 +111,9 @@ erDiagram
     node_media ||--o{ node_media_riders : "assigned to"
     users ||--o{ node_media_riders : "appears in"
     hardware_nodes ||--o{ node_disputes : "subject of"
+    hardware_nodes ||--o{ node_block_overrides : "unblocked by"
+    media_assets ||--o{ takedown_requests : "subject of"
+    users ||--o{ takedown_requests : "requests"
 ```
 
 ### 2.2 DDL (Postgres; abridged to what the relationships need)
@@ -111,7 +121,7 @@ erDiagram
 ```sql
 -- ── Rider Account (the User) ───────────────────────────────────────────
 CREATE TABLE users (
-  user_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,  -- Supabase Auth user
   display_name   TEXT NOT NULL,
   primary_email  CITEXT,                       -- nullable: Apple private relay may hide it
   status         TEXT NOT NULL DEFAULT 'active'
@@ -272,7 +282,7 @@ CREATE TABLE claim_codes (
 -- ── Media ──────────────────────────────────────────────────────────────
 -- Co-ownership via deduplicated pointers (owner decision 2026-09-18).
 -- A clip is uploaded ONCE; each co-owner holds a pointer with their own retention.
--- Object store is provider-neutral here (see open item 11.2-2).
+-- Object store: Cloudflare R2 (Amendment A1). Keys are per asset, never per user.
 CREATE TABLE media_assets (
   media_asset_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   source_node_id   UUID REFERENCES hardware_nodes,
@@ -286,11 +296,12 @@ CREATE TABLE media_pointers (
   pointer_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   media_asset_id   UUID NOT NULL REFERENCES media_assets,
   user_id          UUID NOT NULL REFERENCES users,
-  role             TEXT NOT NULL CHECK (role IN ('uploader','co_owner')),
+  role             TEXT NOT NULL CHECK (role IN ('uploader','co_owner','unit_owner')),
   retention_expires_at TIMESTAMPTZ NOT NULL,   -- from THIS user's own account tier
-  created_via      TEXT NOT NULL CHECK (created_via IN ('host_assignment','recognition_confirmed','guest_claim')),
+  created_via      TEXT NOT NULL CHECK (created_via IN ('host_assignment','recognition_confirmed','guest_claim','unit_owner_master')),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at       TIMESTAMPTZ,
+  hidden_by_takedown_id UUID,                  -- set while a takedown is open (2.5)
   UNIQUE (media_asset_id, user_id)
 );
 
@@ -304,6 +315,7 @@ CREATE TABLE node_media (
   kind             TEXT NOT NULL,              -- original | highlight | derivative
   shared_guest_session_id UUID REFERENCES guest_sessions,  -- set by the host, never inferred
   media_asset_id   UUID REFERENCES media_assets,           -- non-NULL only after verified upload
+  takedown_blocked BOOLEAN NOT NULL DEFAULT false,         -- true after an approved takedown: never re-upload
   created_at       TIMESTAMPTZ NOT NULL
 );
 
@@ -329,6 +341,48 @@ CREATE TABLE node_disputes (
   opened_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at    TIMESTAMPTZ
 );
+
+-- Takedown Requests (section 2.5).
+CREATE TABLE takedown_requests (
+  request_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  media_asset_id  UUID NOT NULL REFERENCES media_assets,
+  requester_user_id UUID NOT NULL REFERENCES users,
+  reason          TEXT,
+  state           TEXT NOT NULL DEFAULT 'pending_review'
+                  CHECK (state IN ('pending_review','deleted','restored','withdrawn')),
+  hidden_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  review_due_at   TIMESTAMPTZ NOT NULL,        -- hidden_at + 48 h
+  unit_owner_id   UUID REFERENCES users,
+  unit_owner_decision TEXT CHECK (unit_owner_decision IN ('approve','decline')),
+  unit_owner_decided_at TIMESTAMPTZ,
+  reviewed_by     TEXT,                        -- Support staff id
+  resolution      TEXT,
+  resolved_at     TIMESTAMPTZ
+);
+
+-- Support-only reversal of a stolen-unit block (section 7.3).
+CREATE TABLE node_block_overrides (
+  override_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  node_id          UUID NOT NULL REFERENCES hardware_nodes,
+  requested_by     TEXT NOT NULL,              -- staff id
+  approver_1       TEXT NOT NULL,
+  approver_2       TEXT NOT NULL,
+  police_report_ref TEXT NOT NULL,             -- agency + report number + date; document held under the evidence rule
+  verified_by      TEXT NOT NULL,
+  rightful_owner_user_id UUID NOT NULL REFERENCES users,
+  executed_at      TIMESTAMPTZ,
+  CHECK (requested_by <> approver_1 AND requested_by <> approver_2 AND approver_1 <> approver_2)
+);
+
+-- Age gates per country (section 8.7). MVP enables the US only.
+CREATE TABLE age_policy (
+  country_code      CHAR(2) PRIMARY KEY,       -- ISO 3166-1 alpha-2
+  min_account_age   SMALLINT NOT NULL,
+  min_biometric_age SMALLINT NOT NULL,
+  signups_enabled   BOOLEAN NOT NULL DEFAULT false
+);
+-- MVP row: ('US', 13, 18, true). EU rows (16 or the member state's lower limit, 18)
+-- are added and enabled only when geographic age-gating ships.
 
 -- ── Consent and biometrics (section 8) ─────────────────────────────────
 CREATE TABLE consent_records (
@@ -381,9 +435,16 @@ CREATE TABLE audit_log (
   unit) and every assigned rider gets a pointer. The object is kept until
   **every** pointer's retention has expired or been deleted, then purged after a
   grace period. Removing a clip removes only the caller's pointer.
-- **Pointers are never inferred.** They are created only by host assignment,
-  by an enrolled adult rider confirming a recognition suggestion, or by a guest
-  claim (6.3).
+- **Pointers for riders are never inferred.** They are created only by host
+  assignment, by an enrolled adult rider confirming a recognition suggestion,
+  or by a guest claim (6.3).
+- **Unit-owner pointer (owner-decided).** The unit owner is the one exception:
+  they automatically receive a pointer (`role='unit_owner'`,
+  `created_via='unit_owner_master'`) to **every** clip recorded on their
+  hardware, because they own the vessel and the camera and keep the master
+  session log. That pointer's retention follows the unit owner's own account
+  tier, so a busy unit keeps clips for at least as long as its owner's tier
+  allows. Model this storage cost in BIN-43.
 
 ### 2.4 Tiers, trials and retention (owner-decided)
 
@@ -396,6 +457,40 @@ CREATE TABLE audit_log (
 | Resale-trial eligibility | Only after a completed transfer or an approved dispute; once per node and buyer; never for the seller or any earlier owner of that node; no loops (A to B to A) |
 | Co-owner with a longer retention | The object persists until the last pointer's retention ends; each rider's own tier decides only their own pointer |
 
+
+### 2.5 Takedown requests (owner-decided)
+
+Deleting a clip from a personal library removes **only that user's pointer**.
+To have a clip scrubbed entirely, a pointer holder files an in-app **Takedown
+Request**:
+
+1. The request is recorded (`takedown_requests`, state `pending_review`).
+2. The clip is **immediately hidden from every other owner's library**
+   (`media_pointers.hidden_by_takedown_id`). The object is kept, not deleted,
+   while the request is open.
+3. The **unit owner** is prompted with the clip and the requester's name. If
+   they **approve**, the object is **deleted immediately**: all pointers are
+   tombstoned, `node_media.takedown_blocked` is set so the unit never
+   re-uploads it, and the audit record keeps only asset id, checksum, request
+   id and timestamps.
+4. Otherwise Binnacle Support completes a **48-hour review** and decides delete
+   or restore (`review_due_at = hidden_at + 48 h`).
+5. Other owners see a neutral notice ("a clip was hidden pending review"). The
+   requester's identity is visible only to the unit owner and Support.
+
+Points I had to settle that the decision did not state (confirm in 11.2):
+- If the 48-hour review is not finished, the clip **stays hidden** and the
+  request escalates. It is neither auto-restored nor auto-deleted.
+- Only pointer holders can file. A cap of 5 open requests per user; repeated
+  rejected requests are flagged to Support.
+- When the unit owner is the requester, that counts as approval, so the clip is
+  deleted at once. This gives the unit owner power to delete a clip another
+  rider co-owns. It follows from the decision and is worth knowing about.
+- A takedown removes **cloud** copies. The copy on the boat's NVMe belongs to
+  the unit owner and is outside its reach, and copies a rider already
+  downloaded are on their own devices.
+- Someone depicted in a clip who has no Binnacle account cannot file one. That
+  needs the public report path (BIN-40, open).
 
 ---
 
@@ -523,9 +618,13 @@ Phone                                         Vision unit
 CST claims:
 ```
 { "iss":"node:<node_id>", "sub":"user:<user_id>", "nsid":"<node_session_id>",
-  "role":"crew", "scopes":[...], "cnf":{"jkt":"<phone key thumbprint>"},
+  "role":"crew", "scopes":[...], "spt":false, "cnf":{"jkt":"<phone key thumbprint>"},
   "iat":..., "exp":..., "jti":"<uuid>", "kid":"<node_key_id>" }
 ```
+
+The prove step also carries `spotter_opt_in` (default `false`, see 8.4); it
+never changes the role or scopes, and the handshake succeeds either way. The
+choice is recorded in the token as `spt` and in the audit log.
 
 ### 4.5 Renewal, end, and revocation
 
@@ -638,37 +737,46 @@ Apple and Google via OIDC. "Email" is **passwordless email one-time code**
 offered, current App Store rules require a privacy-preserving equivalent;
 Sign in with Apple satisfies this. Verify the current guideline at build time.
 
-### 5.0 Identity provider (bought) and the Binnacle token service
+### 5.0 Identity provider: Supabase Auth, plus the Binnacle token service
 
-**Decision (owner, 2026-09-18): buy, do not build credential handling.** Use
-AWS Cognito or Supabase Auth (which one is open, section 11.2) for Apple and
-Google sign-in, passwordless email code, account recovery, session/refresh and
-abuse controls. Binnacle stores no passwords and no sign-in provider tokens.
+**Decision (owner, 2026-09-18): Supabase Auth; no custom auth.** Supabase
+handles Apple and Google sign-in, passwordless email one-time code, sessions,
+refresh, recovery and abuse controls. Binnacle stores no passwords and no
+sign-in provider tokens.
 
-**Design consequence you should know about.** The offline Rider Identity
-Assertion (RIA, 3.1) has to be valid for 14 days, bound to the phone's key,
-and verifiable by a unit against a key set that Binnacle pins and rotates on
-its own schedule (4.9). Managed-IdP tokens generally do not meet all three:
-their access/ID token lifetimes are far shorter than 14 days (verify the
-current limits of the chosen product) and their signing keys and claims are
-under the vendor's control, so a unit could not pin them. Therefore:
+**Fit.** Supabase is PostgreSQL, so `users.user_id` is the Supabase Auth user id
+(`auth.users.id`), Row Level Security is a second line of defence on Binnacle
+tables, and edge functions host the token service's front door.
+`auth_identities` is a view of Supabase's own identity records, not a second
+source of truth.
 
-- The **IdP authenticates the human.**
-- A small **Binnacle token service** (ES256 key in KMS, chained to the
-  firmware-pinned root, 4.9) exchanges a valid IdP session plus proof of the
-  phone's device key for the RIA (`POST /v1/identity/token`).
+**Why a Binnacle token service is still required (approved by the owner).**
+The offline Rider Identity Assertion (RIA, 3.1) must last 14 days, be bound to
+the phone's key, and be verifiable by a unit against keys Binnacle pins and
+rotates itself (4.9). Supabase's documented maximum access-token lifetime is one
+week (default one hour), its tokens are not bound to a phone key, and the
+signing keys are not ours to pin. So:
+
+- **Supabase authenticates the human.**
+- The **Binnacle token service** verifies the Supabase access token against
+  Supabase's published keys and checks the phone's device-key proof, then mints
+  the RIA (`POST /v1/identity/token`). Its ES256 signing key lives in a cloud
+  KMS/HSM, never in an edge-function environment or in the database, and chains
+  to the firmware-pinned root (4.9).
 - This is token exchange, not custom authentication: the service never sees or
   verifies a credential.
 
-`auth_identities` mirrors the IdP's subject and provider; `users` is
-Binnacle's own profile row. Account deletion must delete in both places.
+**Also handled here, because the IdP does not provide it:** the age screen and
+country check at first sign-up (8.7, `age_policy`), and account deletion, which
+must remove the Supabase Auth user (admin API) and every Binnacle row and
+object pointer.
 
 ### 5.1 Identity
 
 | Method & path | Purpose |
 |---|---|
-| Sign-in itself (Apple, Google, email code) | Runs in the bought IdP's SDK/hosted flow, not in Binnacle APIs. Under-13 sign-up is refused (8.7). |
-| `POST /v1/identity/token` | `{idp_session, device_proof}` -> Binnacle access token and RIA. Creates the `users` row on first use. |
+| Sign-in itself (Apple, Google, email code) | Runs in Supabase Auth's SDK/hosted flow, not in Binnacle APIs. Under-age sign-up is refused at profile creation (8.7). |
+| `POST /v1/identity/token` | `{supabase_access_token, device_proof}` -> Binnacle access token and RIA. Creates the `users` row on first use. |
 | `POST /v1/auth/refresh` | Rotate refresh token; returns new access token and RIA. |
 | `POST /v1/auth/logout` | Revoke refresh token and the device's RIAs. |
 | `POST /v1/users/me/identities` | Link another provider. Only after re-authentication; never auto-link on email match alone. |
@@ -779,10 +887,13 @@ co-owned clips is open item 11.2-3.
 
 - Provider keys and OAuth tokens live only in the cloud secret store,
   referenced by `node_stream_destinations.secret_ref`.
-- When a broadcast starts, the unit requests a short-lived, scoped ingest
-  credential from Cloud (or Cloudflare Stream live input). Phones never
-  receive stream keys; crew can pick a destination by label but cannot read
-  the secret.
+- **Live is AWS IVS** (Amendment A1). At session start the unit is given an
+  ingest credential by Cloud. An IVS Low-Latency channel has one long-lived
+  stream key, so Binnacle **rotates it per session** (delete + create) and
+  removes it at session end; it is a bearer secret held encrypted on the unit
+  and never sent to a phone. IVS Real-Time stages (expiring tokens) are being
+  evaluated as an alternative. Phones never receive stream keys; crew pick a
+  destination by label and cannot read the secret.
 - The current Connect behaviour (custom RTMP entered on the phone, kept only
   in memory) would migrate to `POST /v1/nodes/{id}/destinations`.
 - Logs, audit rows, and evidence redact tokens, keys, and sensitive URLs.
@@ -795,10 +906,11 @@ This is what makes a boat sale safe, so it is a design rule, not a convention.
   through a unit.** Objects are keyed by asset id in a private store; there is
   no node-owned bucket and no public URL.
 - The unit has **no** standing storage credentials and no role with list/read
-  on any bucket. To upload, it asks Cloud for a **single-object, short-lived
-  (<= 15 min) upload credential** scoped to that one asset key, with the
-  expected size and checksum enforced (BIN-48). It can write one named object;
-  it cannot read or list anything.
+  on any bucket. To upload, Cloud gives it a **single-object presigned PUT URL**
+  (R2's S3-compatible API, expiry 15 minutes or less) for one asset key, with
+  the expected size and checksum enforced. The unit therefore holds no R2
+  credential at all: it can write one named object and cannot read or list
+  anything.
 - Provider OAuth tokens and stream keys live in the cloud secret store,
   referenced from `node_stream_destinations`; they belong to the account that
   created them.
@@ -877,7 +989,7 @@ storage was ever reachable from the unit (7.1).
 |---|---|
 | Seller cannot reach the unit (lost, dead, sold without reset) | `deauthorize` cuts the node off from Cloud (steps 1-2). The UI states plainly: footage still on the unit is **not** erased until the unit itself is reset. |
 | Buyer has the unit; seller never released it | A physical recovery-mode reset wipes local data (protects the seller) but does **not** grant cloud ownership; Cloud still shows the seller. The buyer opens a Support dispute (7.3). |
-| Stolen unit | Owner reports it stolen (7.3): the unit is permanently blocked from cloud services. A thief can wipe it but cannot claim it. |
+| Stolen unit | Owner reports it stolen (7.3): the unit is blocked from cloud services (reversible only by the Support override in 7.3). A thief can wipe it but cannot claim it. |
 | Power loss mid-erase | Flag-driven resume; no attestation is issued until every step completes. |
 | Transfer never completed | Expires after 7 days; the seller can cancel any time before the erase. Rehomed secrets return to the seller's account. |
 | Replay or theft of the transfer code | Single use, bound to `transfer_id` and the attested new key, 7-day expiry, hashed at rest. |
@@ -902,22 +1014,38 @@ subscription is the used-unit trial in 2.4.
 **Stolen units.** Only the owner of record can report a unit stolen. The
 report sets `stolen_blocked`: the node key and the factory attestation key are
 blocklisted by serial, every credential request is refused, the unit cannot be
-claimed or transferred, and its subscription is suspended. **This is permanent,
-as decided; a dispute ticket cannot lift it.**
+claimed or transferred, and its subscription is suspended. **A dispute ticket
+cannot lift it.** The single exception is the Support-only override below.
 
-**Evidence handling.** Serial-plate photos and receipts are personal data:
-encrypted at rest, visible only to Support, referenced (not embedded) in
-`node_disputes`, and deleted a set period after resolution (period to be set,
-11.2).
+**Override (owner-approved 2026-09-18).** A stolen block is reversed only when
+all of these hold:
+1. A **verified police report** (agency, report number, date) names the unit's
+   serial, and Support has confirmed it with the agency or a verification
+   service.
+2. **Two internal approvers** sign off, each different from the other and from
+   the person who opened the request (enforced by a database check on
+   `node_block_overrides`).
+3. The whole action is audited: who, when, evidence reference, both approvals.
 
-**Risks recorded for the owner (the decision above is implemented as stated):**
+Effect: status becomes `unprovisioned`, the attestation key leaves the
+blocklist, and the unit must be erased and re-provisioned (7.2) before it can be
+claimed by the rightful owner Support has verified. Nothing is restored
+automatically and there is no self-service path.
+
+**Evidence handling.** Serial-plate photos, receipts and police-report documents
+are personal data: encrypted at rest, visible only to Support, referenced (not
+embedded) in `node_disputes` / `node_block_overrides`, and deleted **90 days
+after resolution** (owner-decided). The audit record of the decision itself
+(who, when, outcome) is kept.
+
+**Remaining risks.**
 - A seller who never used the in-app transfer (an informal sale) could report
-  the unit stolen and permanently brick the buyer's unit. The transfer flow
-  removes this because the seller ceases to be the owner of record; the UI
-  should warn buyers who accept a unit without a completed transfer.
-- A mistaken report has no reversal at all. I recommend an audited,
-  Support-only exception requiring a police report and two-person approval; it
-  is not designed in unless you approve it.
+  the unit stolen and block the buyer's unit. The transfer flow removes this
+  because the seller stops being the owner of record; the UI should warn buyers
+  who accept a unit without a completed transfer. A wrongly blocked buyer's
+  route back is a Support dispute plus the override.
+- A fraudulent override request is the new attack surface; the two-person rule,
+  agency verification and audit are the controls.
 
 ---
 
@@ -939,25 +1067,32 @@ creation.
 3. **Only enrolled, consenting riders.** No embeddings for guests, bystanders,
    or anyone who has not enrolled. Spotter cannot attribute clips to
    non-enrolled people.
-4. **Per-ride opt-in to the boat.** An embedding reaches a Vision unit only
-   if the rider allows "this boat may recognise me for this ride" at
-   handshake. It is held encrypted in the unit's memory/session store and
-   purged at session end. Unit owners cannot read or export it.
+4. **Per-ride opt-in (owner-approved 2026-09-18).** When joining a session,
+   Connect shows one simple toggle: **"Allow Spotter AI to recognize me this
+   session."** It is off by default and appears only for riders who are 18 or
+   older and enrolled with valid biometric consent (items 1 and 7). Only when
+   it is on does the phone send `spotter_opt_in: true` in the handshake (4.4);
+   the unit then receives that rider's embedding for the session, holds it
+   encrypted in memory/session storage, and purges it at session end. Turning
+   the toggle off mid-session, or leaving the session, purges it at once. The
+   unit owner cannot switch it on for someone else, read it, or export it.
 5. **Storage and access.** Envelope-encrypted with a dedicated KMS key and
    IAM role, separate from the media and account stores; every access is
    audited.
 6. **Retention and deletion.** A written retention/destruction schedule
    (`destroy_by`) enforced by a job; deletion on request and on account
    deletion, with a deadline set by counsel.
-7. **Age (owner-decided).** Standard accounts require age 13 or older (an
-   under-13 sign-up is refused at a neutral age screen and no data is
-   collected). Biometric enrolment requires age 18 or older, checked from the
-   birth date collected at sign-up; a rider may opt in on turning 18.
-   Consequence: riders under 18 are never recognised by Spotter, so their clips
-   are assigned manually by the host. 13 is the COPPA threshold; other regimes
-   (for example national ages of digital consent up to 16 under GDPR, and some
-   US state laws) may add requirements, so counsel should review before launch
-   outside the US.
+7. **Age (owner-decided).** The MVP targets the US market: standard accounts
+   require age 13 or older (COPPA); biometric enrolment requires 18 or older,
+   checked from the birth date collected at sign-up. An under-13 sign-up is
+   refused at a neutral age screen and no data is collected. Thresholds live in
+   `age_policy` per country and only enabled countries can sign up. **Geographic
+   age-gating (16+) for GDPR is added before European sign-ups are enabled**;
+   member states may set a lower age (13-16), so that table holds each
+   country's value. My recommendation, not stated by the owner: until then,
+   refuse sign-ups from countries that are not enabled, on the server. Riders
+   under 18 are never recognised by Spotter, so their clips are assigned
+   manually by the host.
 8. **Recognition is a suggestion.** A recognition hit proposes a rider for a
    clip; assignment to the account requires the rider's or host's
    confirmation.
@@ -1009,49 +1144,51 @@ None of this is implemented in this change.
 
 ## 11. Decisions log and open items
 
-### 11.1 Decided (owner, 2026-09-18)
+### 11.1 Decided (owner)
 
-| # | Decision | Reflected in |
-|---|---|---|
-| 1 | **Claim code:** two forms, `WAKE-842` (boat Wi-Fi only) and `WAKE-842-K7Q2M9` (cloud) | 6.2, `claim_codes` |
-| 2 | **Resale trial:** no Creator+ trial for used units; 14-day Ride trial; Creator tiers paid | 2.4, `resale_trial` |
-| 3 | **Disputes:** Support manual ticket with serial-plate photo + handwritten note (date + buyer email) + bill of sale/receipt. Stolen units permanently blocked from cloud | 7.3, `node_disputes`, `stolen_blocked` |
-| 4 | **Offline keys:** publish a new signing key 30 days before first use, anchored by a firmware-pinned root key | 4.9 |
-| 5 | **Hardware:** owner-confirmed Secure Boot, OP-TEE disk encryption, programmable fuses for the factory identity key, NVMe Sanitize | 7.2 |
-| 6 | **Auth provider:** buy (AWS Cognito or Supabase Auth); no custom auth | 5.0 |
-| 7 | **Offline token lifetime:** 14 days | 3, 3.1 |
-| 8 | **Tier governance:** unit tier = capture/processing/live; rider tier = long-term cloud retention | 2.4 |
-| 9 | **Clip ownership:** co-ownership through deduplicated pointers; one upload, file kept until all retention limits expire | 2.2, 2.3 |
-| 10 | **Minimum age:** 13 for accounts; 18 for opt-in biometric Spotter embeddings | 2.2, 8 |
+| # | Decision | Date | Reflected in |
+|---|---|---|---|
+| 1 | **Claim code:** two forms, `WAKE-842` (boat Wi-Fi only) and `WAKE-842-K7Q2M9` (cloud) | 09-18 | 6.2 |
+| 2 | **Resale trial:** no Creator+ trial for used units; 14-day Ride trial; Creator tiers paid | 09-18 | 2.4 |
+| 3 | **Disputes:** Support ticket with serial-plate photo + handwritten note (date + buyer email) + bill of sale/receipt | 09-18 | 7.3 |
+| 4 | **Offline keys:** new signing key published 30 days before first use, anchored by a firmware-pinned root | 09-18 | 4.9 |
+| 5 | **Hardware:** owner-confirmed Secure Boot, OP-TEE disk encryption, programmable fuses, NVMe Sanitize | 09-18 | 7.2 |
+| 6 | **Auth provider:** **Supabase Auth**; no custom auth | 09-18 | 5.0 |
+| 7 | **Offline token lifetime:** 14 days | 09-18 | 3, 3.1 |
+| 8 | **Tier governance:** unit tier = capture/processing/live; rider tier = long-term retention | 09-18 | 2.4 |
+| 9 | **Clip ownership:** co-ownership via deduplicated pointers | 09-18 | 2.2, 2.3 |
+| 10 | **Cloud pivot:** durable media on **Cloudflare R2**; live on **AWS IVS** (replaces v0.1 direction) | 09-18 | Amendment A1 |
+| 11 | **Token service:** a small Binnacle service exchanges the Supabase proof for the 14-day phone-bound JWT | 09-18 | 5.0 |
+| 12 | **Unit-owner pointer** to every clip recorded on their hardware | 09-18 | 2.3 |
+| 13 | **Takedown:** deleting = own pointer only; Takedown Request hides the clip from other owners pending 48-hour review, or deletes at once if the unit owner approves | 09-18 | 2.5 |
+| 14 | **Per-ride Spotter opt-in:** "Allow Spotter AI to recognize me this session." | 09-18 | 8.4 |
+| 15 | **Stolen-unit block:** permanent, except a Support-only override with a verified police report and two-person approval | 09-18 | 7.3 |
+| 16 | **Age:** 13 for the MVP (US, COPPA); 18 for biometric; 16+ geographic gating before EU launch | 09-18 | 8.7 |
+| 17 | **Default join policy:** `approve` | 09-18 | 2.2 |
+| 18 | **Claim code lifetime:** 30 days | 09-18 | 6.2 |
+| 19 | **Dispute evidence retention:** 90 days | 09-18 | 7.3 |
 
 ### 11.2 Still open
 
-1. **Cognito or Supabase Auth?** The choice is still open. If AWS stays the
-   durable-media store (BIN-48), Cognito fits IAM/STS-scoped upload credentials
-   more directly; Supabase suits a non-AWS stack. Decide before Phase 1.
-2. **Provider names conflict with the approved architecture.** Your note cites
-   AWS IVS for streaming and Cloudflare R2 for clip storage. Approved
-   Architecture v0.1 (BIN-39/BIN-48) says the opposite: Cloudflare Stream is the
-   preferred live candidate and AWS S3 + CloudFront + MediaConvert the durable
-   media candidate, and BIN-48 says replacing either needs a separate
-   evidence-backed decision. This document stays provider-neutral. Are IVS/R2
-   examples, or a change of direction? If a change, BIN-39, BIN-48 and the BIN-43
-   cost model need updating first.
-3. **Erasure and takedown for co-owned clips.** One co-owner deleting their
-   pointer does not remove the clip for the other. A rider who wants a clip that
-   shows them taken down needs a separate report/takedown path (and GDPR-style
-   erasure handling); this needs BIN-40's moderation work.
-4. **Does the unit owner (host) get a pointer** for every clip recorded on
-   their unit, or only for clips they are in or assign to themselves?
-5. **Stolen-flag reversal:** confirm "no reversal" or approve the audited
-   Support-only exception (7.3).
-6. **Age law beyond COPPA** (section 8.7), and the product effect that under-18
-   riders are never auto-recognised.
-7. **Proposals you have not yet ruled on:** default `join_policy` = `approve`;
-   claim-code lifetime 30 days; per-ride opt-in for embeddings held in unit
-   memory only (8.4); **legal review of section 8**, which is required before
-   Phase 6.
-8. **Retention period for dispute evidence** (suggest 90 days after resolution).
+1. **Legal review of section 8** (biometrics) is required before Phase 6. It
+   has not been ruled on.
+2. **IVS fan-out and multitrack** (Amendment A1, gaps 1-2). IVS has no
+   documented native restream to YouTube/Facebook/Twitch, and multitrack, as
+   documented, gives viewers adaptive quality but raises the uplink rather than
+   letting the unit degrade it. Confirm the approach for external fan-out and
+   accept the BIN-39 spikes.
+3. **Takedown details I assumed** (2.5): stays hidden if the 48-hour review
+   overruns; cap of 5 open requests; the unit owner as requester deletes at
+   once; the requester's name shown to the unit owner; boat-NVMe copies out of
+   reach. Confirm or correct.
+4. **People depicted who have no account** cannot request a takedown yet; needs
+   the public report path (BIN-40).
+5. **Storage cost of unit-owner pointers** (2.3): every clip on a unit is kept
+   per its owner's tier. Model in BIN-43.
+6. **Non-enabled countries** (8.7): confirm that sign-ups are refused outside
+   the US until EU age-gating ships.
+7. **R2 delivery, transcoding, archive and live-archive location** (Amendment
+   A1, gaps 5-7), which sit under BIN-48.
 
 ---
 
@@ -1060,13 +1197,13 @@ None of this is implemented in this change.
 | Phase | Deliverable | Proving test |
 |---|---|---|
 | 0 | Resolve the open items in section 11.2; Core-team review of section 4.8 | Written sign-off |
-| 1 | Cloud identity: bought IdP integration, Binnacle token service minting RIAs, `users`, devices, JWKS, refresh, delete account | Two providers create one account with no duplicate; deleted account cannot sign in (in the IdP and in Binnacle); under-13 sign-up refused with no data stored; an RIA cannot be used from a different phone; tokens redacted in logs |
+| 1 | Cloud identity: Supabase Auth integration, Binnacle token service minting RIAs, `users`, devices, JWKS, refresh, delete account | Two providers create one account with no duplicate; deleted account cannot sign in (in the IdP and in Binnacle); under-13 sign-up refused with no data stored; an RIA cannot be used from a different phone; tokens redacted in logs |
 | 2 | Node claim, node keypair, Cloud sync, `hardware_nodes`, subscriptions, storage-credential-free upload path (7.1) | A unit registered to owner A; with the unit's own credentials, every read/list against A's media is denied and an upload can write only its one named object |
 | 2b | Transfer and cryptographic factory reset (7.2) | Full sale A to B: A's cloud library is unchanged and playable; B sees no earlier data; raw NVMe image carved for known test files finds none; old node key is rejected by Cloud; interrupted erase resumes; forged attestation and replayed transfer code are rejected; physical reset of a non-released unit does not transfer ownership |
-| 2c | Disputes and stolen units (7.3) | A dispute with all proofs and a completed erase transfers ownership and applies the 14-day Ride trial only; missing any proof is refused; a unit reported stolen by its owner of record is refused every Cloud call, cannot be claimed or transferred, and stays blocked after a physical reset; a seller who has already completed a transfer cannot flag the unit |
-| 3 | Offline handshake and CST, key/revocation courier bundles (4.9) | With **cellular disabled on both sides**: a rider from a different account joins as crew; replay of a captured handshake fails; a revoked rider is rejected after sync; a rolled-back clock is refused; a token stolen to another phone fails PoP; a unit that missed a key rotation accepts a phone-couriered signed bundle and rejects a lower-version one |
+| 2c | Disputes and stolen units (7.3) | A dispute with all proofs and a completed erase transfers ownership and applies the 14-day Ride trial only; missing any proof is refused; a unit reported stolen by its owner of record is refused every Cloud call, cannot be claimed or transferred, and stays blocked after a physical reset; a seller who has already completed a transfer cannot flag the unit; a stolen block is reversed only with a verified police report and two different approvers (the database refuses a repeated approver), after which the unit must be erased before it can be claimed |
+| 3 | Offline handshake and CST, key/revocation courier bundles (4.9) | With **cellular disabled on both sides**: a rider from a different account joins as crew; replay of a captured handshake fails; a revoked rider is rejected after sync; a rolled-back clock is refused; a token stolen to another phone fails PoP; a unit that missed a key rotation accepts a phone-couriered signed bundle and rejects a lower-version one; the Spotter toggle defaults off and, with it off, no embedding reaches the unit; turning it off mid-session purges the embedding |
 | 4 | Guest portal and Claim Code | A guest with no app downloads a host-shared clip; on the boat's Wi-Fi the short code `WAKE-nnn` merges it with no signal; later the full code redeems through Cloud, the clip matches by checksum with no duplicate; the short code is refused by Cloud; the 6th wrong guess locks a code |
-| 5 | Media co-ownership and entitlement lookup (with BIN-41/48/43) | A two-rider clip uploads once and both riders get pointers; deleting one pointer leaves the clip for the other; the object is purged only after both retentions end, each computed from that rider's own tier; unauthorized playback is blocked; uploaded object hash equals local hash before a clip is labelled backed up |
+| 5 | Media co-ownership and entitlement lookup (with BIN-41/48/43) | A two-rider clip uploads once and both riders get pointers; deleting one pointer leaves the clip for the other; the object is purged only after both retentions end, each computed from that rider's own tier; unauthorized playback is blocked; uploaded object hash equals local hash before a clip is labelled backed up; the unit owner has a pointer to every clip recorded on their unit; a takedown hides the clip from other owners at once, a unit-owner approval deletes it and the unit never re-uploads it, an unreviewed request stays hidden after 48 hours |
 | 6 | Biometric enrolment (after legal review) | Enrollment impossible without a consent row; revocation destroys the embedding within the stated deadline; guests never get embeddings |
 
 Nothing here is a claim that any phase exists today.
