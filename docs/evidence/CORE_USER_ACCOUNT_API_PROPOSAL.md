@@ -36,9 +36,15 @@ US-only launch geo-fence (8.7); biometric legal hard block (section 8, item 9);
 IVS stream-key rotation approved (7); Binnacle Archive dropped, Creator+
 retention 1 year on standard R2 (2.4).
 
+**Revision v2.5 (2026-09-18):** **AWS IVS is dropped**; live is Cloudflare Stream for
+the whole pipeline (Amendment A1 rev 3), with a live cost cap of 20% of tier
+revenue. Earlier revision notes above that mention IVS are history. Also: the
+biometric enforcement is approved and implemented (section 8); co-owner
+notification on a unit-owner delete-for-all (2.5); spike parameters approved.
+
 **Related issues:** BIN-46 (security/account linking/authorization), BIN-40
 (Binnacle Live privacy/viewing), BIN-41 (cloud media/Library), BIN-48
-(S3/CloudFront), BIN-43 (subscriptions/entitlements), BIN-39 (live uplink).
+(R2 media/VOD), BIN-43 (subscriptions/entitlements), BIN-39 (live uplink).
 
 **Standing constraints carried into this design**
 - No biometric *authentication*. Face/physique embeddings (section 8) are
@@ -376,6 +382,16 @@ CREATE TABLE takedown_hash_list (
   added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Neutral in-app notices (section 2.5). Deliberately holds no media reference or thumbnail.
+CREATE TABLE user_notifications (
+  notification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL REFERENCES users ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK (kind IN ('clip_removed_by_unit_owner')),
+  session_date    DATE NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  read_at         TIMESTAMPTZ
+);
+
 -- Support-only reversal of a stolen-unit block (section 7.3).
 CREATE TABLE node_block_overrides (
   override_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -504,8 +520,16 @@ Confirmed rules (owner, 2026-09-18):
   hardware. They can instantly delete a clip they co-own or host, **for
   everyone**, overriding rider and guest pointers, with or without a takedown
   request (`DELETE /v1/media/{id}?scope=all`). A unit owner who files a takedown
-  is treated as approving it. I recommend notifying affected co-owners when this
-  happens; that is a suggestion, not a decision.
+  is treated as approving it.
+- **Co-owner notification (owner-approved 2026-09-18).** When the unit owner
+  deletes a co-owned clip for everyone, every other pointer holder gets a
+  neutral, automated **in-app** notification: *"A clip from your session on
+  [Date] was removed by the boat owner."* The payload contains only the
+  notification kind, the session date and the recipient. **No thumbnail, title,
+  clip id or media reference.** It is in-app only, with no OS push, because
+  lock-screen text could expose it (`user_notifications`, below). Not decided:
+  whether an approved takedown deletion should send a similar neutral notice;
+  see 11.2.
 - **Non-account bystanders (accepted MVP limitation).** They use a standard web
   support ticket. Support enters it as a takedown request
   (`requester_user_id` NULL, `support_ticket_ref` set) and it runs through the
@@ -935,17 +959,19 @@ co-owned clips is open item 11.2-3.
 
 - Provider keys and OAuth tokens live only in the cloud secret store,
   referenced by `node_stream_destinations.secret_ref`.
-- **Live is AWS IVS** (Amendment A1). At session start the unit is given an
-  ingest credential by Cloud. An IVS Low-Latency channel has one long-lived
-  stream key, so Binnacle **rotates it per session** (delete + create) and
-  destroys it at session shutdown (approved 2026-09-18); it is a bearer secret held encrypted on the unit
-  and never sent to a phone. IVS Real-Time stages (expiring tokens) are being
-  evaluated as an alternative. Phones never receive stream keys; crew pick a
-  destination by label and cannot read the secret.
-- **External fan-out.** The unit sends a single SRT uplink. The fan-out engine
-  is decided by the BIN-39 spike (`docs/architecture/BIN-39_FANOUT_SPIKE.md`):
-  MediaLive versus a managed third party, with Cloudflare Stream as a
-  simulcast-only fallback. Destination keys stay server-side whichever wins.
+- **Live is Cloudflare Stream** for the whole pipeline (Amendment A1 rev 3; AWS
+  IVS is dropped): SRT ingest, multi-destination fan-out (simulcast outputs) and
+  HLS/DASH viewer playback. For each session, Cloud creates a Stream **live
+  input** and gives the unit its SRT connection details; the live input is
+  **deleted at session shutdown**. This applies the owner-approved rule to
+  rotate per session and destroy at shutdown; quotas and rate limits are
+  verified in the BIN-39 spike. The credential is a bearer secret held encrypted
+  on the unit and never sent to a phone. Crew pick a destination by label and
+  cannot read the secret. The unit sends **one SRT uplink only**.
+- **Live cost rule (owner-approved):** ingest + fan-out + playback must not
+  exceed 20% of the tier's monthly revenue (about $1.20 Ride, $2.40 Creator,
+  $4.00 Creator+). The worked numbers and their assumptions are in Amendment A1
+  section 4. The Free tier needs its own live quota.
 - The current Connect behaviour (custom RTMP entered on the phone, kept only
   in memory) would migrate to `POST /v1/nodes/{id}/destinations`.
 - Logs, audit rows, and evidence redact tokens, keys, and sensitive URLs.
@@ -1158,13 +1184,24 @@ creation.
    not legal advice; the repo already carries `Rider.biometricConsent` and a
    BIPA-scoped consent reference, which must be reconciled with it.
 
-   *Proposed enforcement, not yet implemented and needing the owner's approval:*
-   (a) all embedding code lives under one path with a code-owner rule that
-   requires a privacy/legal approver; (b) the feature is off by default in every
-   production build; (c) a required check that a merge to the production branch
-   cites a sign-off record ID; (d) test data limited to synthetic or generated
-   imagery listed in a dataset manifest, with no real consumer or staff images
-   without consent; (e) the sign-off record kept under `docs/legal/`.
+   *Enforcement (approved and implemented 2026-09-18; see `docs/legal/README.md`):*
+   (a) the feature defaults to OFF (`kSpotterBiometricsEnabled`, compile-time)
+   with a test that fails if the default changes; (b) the `biometric-guard`
+   check, required by the ruleset on `main` and `production`, blocks a merge that
+   touches biometric code unless `docs/legal/BIOMETRIC_SIGNOFF.md` carries a real
+   sign-off ID with `Status: APPROVED` **and** a privacy admin who is not the PR
+   author has approved the latest commit; it also blocks setting the flag on or
+   changing its default; (c) `.github/CODEOWNERS` and
+   `.github/privacy-admins.txt` name **@Bleebitz** as privacy admin; (d) test
+   environments run on non-protected branches with synthetic data only, listed in
+   `docs/legal/synthetic-data-manifest.md`.
+
+   *Limits, stated plainly:* this is a personal repository, so a team handle such
+   as `@Binnacle-Privacy` is not possible; the sole maintainer cannot approve
+   their own PR, so **a second privacy admin with write access must be added
+   before any biometric code can merge**; the guard files are not yet code-owned;
+   detection is by file name and specific keywords. **The legal review itself has
+   not happened and no sign-off record exists.**
 
 ---
 
@@ -1223,7 +1260,7 @@ None of this is implemented in this change.
 | 7 | **Offline token lifetime:** 14 days | 09-18 | 3, 3.1 |
 | 8 | **Tier governance:** unit tier = capture/processing/live; rider tier = long-term retention | 09-18 | 2.4 |
 | 9 | **Clip ownership:** co-ownership via deduplicated pointers | 09-18 | 2.2, 2.3 |
-| 10 | **Cloud pivot:** durable media on **Cloudflare R2**; live on **AWS IVS** (replaces v0.1 direction) | 09-18 | Amendment A1 |
+| 10 | **Cloud pivot:** durable media on **Cloudflare R2** (replaces S3). *Live provider superseded by row 29* | 09-18 | Amendment A1 |
 | 11 | **Token service:** a small Binnacle service exchanges the Supabase proof for the 14-day phone-bound JWT | 09-18 | 5.0 |
 | 12 | **Unit-owner pointer** to every clip recorded on their hardware | 09-18 | 2.3 |
 | 13 | **Takedown:** deleting = own pointer only; Takedown Request hides the clip from other owners pending 48-hour review, or deletes at once if the unit owner approves | 09-18 | 2.5 |
@@ -1233,34 +1270,45 @@ None of this is implemented in this change.
 | 17 | **Default join policy:** `approve` | 09-18 | 2.2 |
 | 18 | **Claim code lifetime:** 30 days | 09-18 | 6.2 |
 | 19 | **Dispute evidence retention:** 90 days | 09-18 | 7.3 |
-| 20 | **Live fan-out:** the unit sends one SRT uplink only; spike MediaLive vs a managed third party (Restream named); if both fail margin/latency, evaluate Cloudflare Stream as simulcast-only | 09-18 | 7, `BIN-39_FANOUT_SPIKE.md` |
+| 20 | **Live fan-out:** the unit sends one SRT uplink only. *Comparison of MediaLive / Restream superseded by row 29* | 09-18 | 7 |
 | 21 | **Takedown rules confirmed:** hidden from all libraries on overrun until cleared; max 5 open requests; unit owner may delete for everyone instantly | 09-18 | 2.5 |
 | 22 | **Takedown Hash List:** a reconnecting unit's first exchange pulls it and scrubs local NVMe | 09-18 | 2.5, 4.7 |
 | 23 | **Bystanders without an account:** web support ticket for the MVP | 09-18 | 2.5 |
 | 24 | **US geo-fence:** refuse all non-US sign-ups until EU age check and GDPR infrastructure are built and tested | 09-18 | 8.7 |
 | 25 | **Biometric hard block:** no Spotter embedding code in production without documented legal sign-off; synthetic-data test environments allowed | 09-18 | 8 (item 9) |
-| 26 | **IVS stream key** rotated per session and destroyed at shutdown | 09-18 | 7 |
-| 27 | **Transcoding:** dedicated spike for HLS from R2 (Containers + FFmpeg or a managed transcoder); MediaConvert/CloudFront out | 09-18 | Amendment A1 gap 6 |
+| 26 | **Ingest credential** rotated per session and destroyed at shutdown (now a per-session Stream live input) | 09-18 | 7 |
+| 27 | **Transcoding:** MediaConvert/CloudFront out; see row 31 | 09-18 | Amendment A1 |
 | 28 | **Binnacle Archive / Deep Archive dropped;** Creator+ 1 year on standard R2 | 09-18 | 2.4 |
+| 29 | **AWS IVS dropped entirely.** Cloudflare Stream for the whole live pipeline (SRT ingest, fan-out, HLS/DASH playback). Live cost (ingest + fan-out + playback) must not exceed **20% of the tier's monthly revenue** | 09-18 | Amendment A1 rev 3, section 4 |
+| 30 | **Spike approved:** $50 cap; private/unlisted test destinations (no public Binnacle channels); credentials via the owner's secrets manager, never in the repo | 09-18 | `BIN-39_FANOUT_SPIKE.md` |
+| 31 | **VOD** via Stream's native encoding; custom FFmpeg (AI highlights) only via ephemeral containers (Fargate, DigitalOcean App Platform, Cloudflare Containers), not Workers | 09-18 | Amendment A1 |
+| 32 | **Biometric enforcement** approved and implemented: flag default OFF, `biometric-guard` required check, CODEOWNERS/privacy admin | 09-18 | 8 (item 9) |
+| 33 | **Co-owner notification** when a unit owner deletes for everyone: neutral in-app text, no thumbnail | 09-18 | 2.5 |
 
 ### 11.2 Still open
 
-1. **Fan-out spike results** (BIN-39). I can run it once you provide accounts, a
-   spend cap and approved test destinations. Also set the pass/fail numbers; my
-   proposed 15% cost share would fail even the cheapest candidate under my own
-   usage assumption (`BIN-39_FANOUT_SPIKE.md`, section 3).
-2. **Transcoding spike results** (BIN-48). Workers alone cannot run FFmpeg;
-   the option is Cloudflare Containers or a managed transcoder.
-3. **Legal sign-off for Spotter embeddings.** The block is decided; the review
-   itself has not happened. Also approve the proposed enforcement mechanism
-   (section 8, item 9).
-4. **BIN-43 cost model** must include: a pointer for the unit owner on every
-   clip; co-owned clips stored once; Creator+ 1-year retention on standard R2;
-   R2 operation fees; IVS hours; the chosen fan-out engine.
-5. **If Cloudflare Stream becomes the fan-out engine,** decide what IVS still
-   provides beyond Stream's own playback (spike item 8).
-6. **Notify co-owners when a unit owner deletes for everyone.** Recommended,
-   not decided.
+1. **Spike inputs from you:** the Cloudflare tokens in the secrets manager (and
+   how they are injected), the account identifiers, and the names of the private
+   test destinations. Latency thresholds once the first measurements exist.
+2. **Live cost levers.** At Creator, 3 outputs and 8 hours a month the 20% cap
+   allows only about 2 concurrent Binnacle Live viewers (Amendment A1, section
+   4). Choose the levers: live-hour and viewer-minute quotas, an output cap,
+   HLS versus WebRTC (billed from 2026-10-15), or negotiated pricing. **The Free
+   tier needs its own quota.**
+3. **VOD path.** Stream VOD (about $0.06 per viewing hour, $0.30 per stored hour
+   per month) versus R2-served HLS (no egress fee) changes the margin argument
+   for R2; the BIN-48 spike compares them.
+4. **Legal sign-off for Spotter embeddings.** The block is enforced; the review
+   has not happened. **Add a second privacy admin with write access** or no
+   biometric code can ever merge.
+5. **BIN-43 cost model:** unit-owner pointer on every clip; co-owned clips stored
+   once; Creator+ one-year retention on standard R2; R2 operation fees; Stream
+   storage and delivery.
+6. **Takedown-approved deletions:** should co-owners get a similar neutral notice
+   (suggested, not decided)?
+7. **Repository visibility.** The repository is **public** and now holds pricing
+   targets, provider decisions, the security design and a device serial number in
+   evidence files. Decide whether to make it private or move `docs/` elsewhere.
 
 ---
 
@@ -1275,7 +1323,7 @@ None of this is implemented in this change.
 | 2c | Disputes and stolen units (7.3) | A dispute with all proofs and a completed erase transfers ownership and applies the 14-day Ride trial only; missing any proof is refused; a unit reported stolen by its owner of record is refused every Cloud call, cannot be claimed or transferred, and stays blocked after a physical reset; a seller who has already completed a transfer cannot flag the unit; a stolen block is reversed only with a verified police report and two different approvers (the database refuses a repeated approver), after which the unit must be erased before it can be claimed |
 | 3 | Offline handshake and CST, key/revocation courier bundles (4.9) | With **cellular disabled on both sides**: a rider from a different account joins as crew; replay of a captured handshake fails; a revoked rider is rejected after sync; a rolled-back clock is refused; a token stolen to another phone fails PoP; a unit that missed a key rotation accepts a phone-couriered signed bundle and rejects a lower-version one; the Spotter toggle defaults off and, with it off, no embedding reaches the unit; turning it off mid-session purges the embedding |
 | 4 | Guest portal and Claim Code | A guest with no app downloads a host-shared clip; on the boat's Wi-Fi the short code `WAKE-nnn` merges it with no signal; later the full code redeems through Cloud, the clip matches by checksum with no duplicate; the short code is refused by Cloud; the 6th wrong guess locks a code |
-| 5 | Media co-ownership and entitlement lookup (with BIN-41/48/43) | A two-rider clip uploads once and both riders get pointers; deleting one pointer leaves the clip for the other; the object is purged only after both retentions end, each computed from that rider's own tier; unauthorized playback is blocked; uploaded object hash equals local hash before a clip is labelled backed up; the unit owner has a pointer to every clip recorded on their unit; a takedown hides the clip from other owners at once, a unit-owner approval deletes it and the unit never re-uploads it, an unreviewed request stays hidden from **all** libraries after 48 hours until Support clears it; a sixth open request is refused; the unit owner's delete-for-all removes it for every pointer holder; a unit that was offline pulls the Takedown Hash List first on reconnect, uploads nothing before applying it, deletes the local file and returns a signed erase receipt; a lower list version is refused; a bystander's web ticket entered by Support hides and deletes through the same path |
+| 5 | Media co-ownership and entitlement lookup (with BIN-41/48/43) | A two-rider clip uploads once and both riders get pointers; deleting one pointer leaves the clip for the other; the object is purged only after both retentions end, each computed from that rider's own tier; unauthorized playback is blocked; uploaded object hash equals local hash before a clip is labelled backed up; the unit owner has a pointer to every clip recorded on their unit; a takedown hides the clip from other owners at once, a unit-owner approval deletes it and the unit never re-uploads it, an unreviewed request stays hidden from **all** libraries after 48 hours until Support clears it; a sixth open request is refused; the unit owner's delete-for-all removes it for every pointer holder; a unit that was offline pulls the Takedown Hash List first on reconnect, uploads nothing before applying it, deletes the local file and returns a signed erase receipt; a lower list version is refused; a bystander's web ticket entered by Support hides and deletes through the same path; after a unit-owner delete-for-all each other co-owner receives one neutral in-app notice with no thumbnail, title or clip id, and no OS push |
 | 6 | Biometric enrolment: **synthetic-data test environments only until documented legal sign-off; no merge to the production branch without it** | Enrollment impossible without a consent row; enrolment refused under 18; revocation destroys the embedding within the stated deadline; guests never get embeddings; a merge to production without a sign-off record is blocked |
 
 Nothing here is a claim that any phase exists today.
