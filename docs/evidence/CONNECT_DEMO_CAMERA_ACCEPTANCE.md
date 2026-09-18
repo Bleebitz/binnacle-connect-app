@@ -52,3 +52,27 @@ existing no-network guarantee.
 - No Cloud ownership or publishing workflow was moved into Connect; this work
   is limited to the client-side camera source, playback, HUD, and tests.
 - No unrelated repository was modified.
+
+## Samsung Galaxy S25 Ultra deployment follow-up — 2026-09-18
+
+The Demo Camera branch at commit
+`4f02db90d07c61e37454f04ddadd1b79559c3617` was deployed to the connected
+Samsung Galaxy S25 Ultra (`SM-S938U`, device serial `R5CY13C57LT`). The phone
+already contained the same application ID at `versionCode=2010`, so the
+verified source was rebuilt with `flutter build apk --debug
+--build-number=2011 --no-pub` to permit a normal in-place Android upgrade.
+This follows the repository's existing controlled-device build-number pattern;
+the package identity and `versionName=0.1.0` remain unchanged.
+
+- Deployed APK SHA-256:
+  `626C97A34D469F862AEC4BC5875CC2E1E9C6AC7EBC215E260DCC842F2ECC8851`.
+- `adb install -r` result: `Success`; the app was not uninstalled and its data
+  was not cleared.
+- Post-install `dumpsys package` result: `versionCode=2011`,
+  `versionName=0.1.0`, `lastUpdateTime=2026-09-18 13:48:59` local time.
+- A cold `am force-stop` / explicit `MainActivity` launch succeeded; Android
+  reported `MainActivity` as focused and `pidof` confirmed a running process.
+
+This deployment check proves installation and launch of the new branch build.
+It does not add a new S25 acceptance claim for on-screen video playback; that
+remains a direct visual/user acceptance observation.
