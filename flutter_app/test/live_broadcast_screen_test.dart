@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:binnacle_connect/main.dart';
 import 'package:binnacle_connect/ui/screens/capture_screen.dart';
 import 'package:binnacle_connect/ui/screens/live_broadcast_screen.dart';
+import 'package:binnacle_connect/ui/widgets/connect_startup.dart';
 
 /// Every tab's screen — and every pushed route beneath the current one —
 /// stays mounted (see main.dart's _RootShell / Navigator), so
@@ -44,10 +45,15 @@ Future<void> openConnectLive(WidgetTester tester) async {
 
 void main() {
   setUp(() {
+    // These tests exercise the app past the splash, not the splash itself
+    // (see test/startup_test.dart for that) — same idiom as widget_test.dart.
+    ConnectStartup.debugSkipForTesting = true;
     TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
     FlutterSecureStorage.setMockInitialValues({});
   });
+
+  tearDown(() => ConnectStartup.debugSkipForTesting = false);
 
   testWidgets('GO LIVE entry point reaches Connect Live from the Live tab, unmistakably demo-labeled',
       (tester) async {
