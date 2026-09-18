@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/services/control_channel_service.dart';
 import '../../core/services/pairing_service.dart';
+import '../../core/services/upload_preferences_service.dart';
 import '../../core/models/credential.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/binnacle_background.dart';
+import 'library_screen.dart' show ClipRepository;
 import 'pairing_screen.dart';
 import 'device_list_screen.dart';
 import 'connected_services_screen.dart';
@@ -16,6 +18,7 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final control = context.watch<ControlChannelService>();
     final pairing = context.watch<PairingService>();
+    final clips = context.watch<ClipRepository>();
     final state = control.state;
 
     return BinnacleBackground(
@@ -70,6 +73,41 @@ class SettingsScreen extends StatelessWidget {
                 trailing: const Icon(Icons.chevron_right, size: 18),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const ConnectedServicesScreen()),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            _Section(title: 'Uploads', children: [
+              RadioListTile<UploadNetworkPreference>(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: const Text('Wi-Fi only'),
+                subtitle: const Text('Queued media waits for Wi-Fi before uploading',
+                    style: TextStyle(fontSize: 11)),
+                value: UploadNetworkPreference.wifiOnly,
+                groupValue: clips.uploadNetworkPreference,
+                onChanged: (v) => clips.setUploadNetworkPreference(v!),
+              ),
+              RadioListTile<UploadNetworkPreference>(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: const Text('Wi-Fi or cellular'),
+                subtitle: const Text('Uploads may use cellular data', style: TextStyle(fontSize: 11)),
+                value: UploadNetworkPreference.wifiOrCellular,
+                groupValue: clips.uploadNetworkPreference,
+                onChanged: (v) => clips.setUploadNetworkPreference(v!),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(14, 0, 14, 12),
+                child: Text(
+                  // Accurate, not aspirational: this app has no background
+                  // service/WorkManager integration, so a queued upload
+                  // only progresses while the app is open and the OS
+                  // hasn't suspended it — the exact honesty requirement
+                  // this section exists to satisfy.
+                  'Uploads only run while Binnacle Connect is open. Android and iOS '
+                  'can pause or stop the app in the background at any time — queued '
+                  'media stays queued and resumes automatically next time you open '
+                  'the app on a matching connection; it is never lost.',
+                  style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11, height: 1.4),
                 ),
               ),
             ]),
