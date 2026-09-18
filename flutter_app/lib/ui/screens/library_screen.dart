@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -15,12 +16,14 @@ import '../../core/services/pairing_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
+import '../widgets/media_import_sheet.dart';
 
 /// Clip store. Demo mode is a local, in-memory scaffold ([seedDemo]/
-/// [addFromCapture]/[importFallClip]). Core mode is backed by a real fetch
-/// against the Core's clip catalog ([loadFromCore]) — see
-/// media_catalog_service.dart for the (unverified, no live Core exists yet)
-/// endpoint contract.
+/// [addFromCapture]). Core mode is backed by a real fetch against the
+/// Core's clip catalog ([loadFromCore]) — see media_catalog_service.dart
+/// for the (unverified, no live Core exists yet) endpoint contract.
+/// [importPicked] (real phone media import) works in both modes — it's
+/// the user's own local file, independent of demo/Core.
 class ClipRepository extends ChangeNotifier {
   final List<Clip> _clips = [];
   final LibraryLocalStore _localStore;
@@ -36,8 +39,16 @@ class ClipRepository extends ChangeNotifier {
 
   /// True while a pick/import is in flight — the "Add media" UI disables
   /// itself on this, so a duplicate tap during a slow picker/copy can't
-  /// start a second concurrent import.
+  /// start a second concurrent import. Set via [setImporting] rather than
+  /// directly so every call site (Library, Best Falls, Community) shares
+  /// one real guard instead of each screen inventing its own boolean.
   bool importing = false;
+
+  void setImporting(bool value) {
+    if (importing == value) return;
+    importing = value;
+    notifyListeners();
+  }
 
   /// Restores phone-imported entries persisted from a prior session — see
   /// library_local_store.dart. Call once at startup (main.dart), before
@@ -337,6 +348,17 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
         final rest = hero == null ? clips : clips.where((c) => c.id != hero.id).toList();
 
         return Scaffold(
+          // Disabled (not spinning) while an import is in flight — most of
+          // that time is the user deciding at the preview dialog, not
+          // continuous work, so an indeterminate spinner on the FAB itself
+          // would misrepresent an indefinite wait as ongoing progress. The
+          // brief real copy step shows its own spinner in a dialog (see
+          // media_import_sheet.dart's _showImporting).
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: widget.repository.importing ? null : () => _openAddMedia(context),
+            icon: const Icon(Icons.add_photo_alternate_outlined),
+            label: const Text('Add media'),
+          ),
           body: SafeArea(
             child: clips.isEmpty
                 ? Column(
@@ -426,6 +448,29 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
     );
   }
 
+  Future<void> _openAddMedia(BuildContext context) async {
+    final kind = await showModalBottomSheet<ImportMediaKind>(
+      context: context,
+      backgroundColor: BinnacleColors.navy,
+      builder: (sheetContext) => SafeArea(
+        child: Wrap(children: [
+          ListTile(
+            leading: const Icon(Icons.photo_outlined, color: BinnacleColors.tealBright),
+            title: const Text('Choose a photo'),
+            onTap: () => Navigator.of(sheetContext).pop(ImportMediaKind.photo),
+          ),
+          ListTile(
+            leading: const Icon(Icons.videocam_outlined, color: BinnacleColors.tealBright),
+            title: const Text('Choose a video'),
+            onTap: () => Navigator.of(sheetContext).pop(ImportMediaKind.video),
+          ),
+        ]),
+      ),
+    );
+    if (kind == null || !context.mounted) return;
+    await pickAndImportMedia(context, kind: kind);
+  }
+
   void _openClip(BuildContext context, Clip clip) {
     showGlassBottomSheet(
       context: context,
@@ -451,29 +496,64 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   VideoPlayerController? _player;
   String? _playerError;
 
-  bool get _hasRealMedia => widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
+  /// Looks up the live clip from the repository rather than trusting the
+  /// snapshot passed at open time — an in-flight upload's progress
+  /// (copyWith'd onto a new Clip instance on every update, see
+  /// ClipRepository.startUpload) must be reflected live while this sheet
+  /// stays open, not frozen at whatever it looked like on open.
+  Clip get clip => widget.repository.clips
+      .firstWhere((c) => c.id == widget.clip.id, orElse: () => widget.clip);
+
+  bool get _hasRealMedia => clip.mediaUrl != null && clip.kind != ClipKind.photo;
+
+  /// A real file on this device — from [ClipRepository.importPicked] —
+  /// distinct from [_hasRealMedia] (a Core-hosted URL). Independent of any
+  /// backend: playable whether or not upload is available.
+  bool get _hasLocalVideo => clip.localPath != null && clip.kind != ClipKind.photo;
+  bool get _hasLocalPhoto => clip.localPath != null && clip.kind == ClipKind.photo;
 
   /// Download/share only make sense for a real Core-hosted link — a bundled
   /// demo asset (a local `assets/...` path, see seedDemo()) is genuinely
   /// playable but isn't a URL `url_launcher`/`share_plus` can do anything
   /// useful with.
-  bool get _isRemoteMedia => _hasRealMedia && !widget.clip.mediaUrl!.startsWith('assets/');
+  bool get _isRemoteMedia => _hasRealMedia && !clip.mediaUrl!.startsWith('assets/');
+
+  @override
+  void initState() {
+    super.initState();
+    // Repaints this sheet while it's open for a live upload progress/
+    // outcome update — the sheet isn't inside the Library screen's own
+    // AnimatedBuilder(animation: repository), it's a separate route.
+    widget.repository.addListener(_onRepositoryChanged);
+  }
+
+  void _onRepositoryChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
+    widget.repository.removeListener(_onRepositoryChanged);
     _player?.dispose();
     super.dispose();
   }
 
   Future<void> _play() async {
-    final url = widget.clip.mediaUrl;
-    if (url == null) return;
-    // A bundled demo asset (see seedDemo()) is a local path, not an http(s)
-    // URL — a real Core-backed clip's mediaUrl always comes from
-    // HttpMediaCatalogService and is always http(s).
-    final controller = url.startsWith('assets/')
-        ? VideoPlayerController.asset(url)
-        : VideoPlayerController.networkUrl(Uri.parse(url));
+    final localPath = clip.localPath;
+    final url = clip.mediaUrl;
+    late final VideoPlayerController controller;
+    if (localPath != null && clip.kind != ClipKind.photo) {
+      controller = VideoPlayerController.file(File(localPath));
+    } else if (url != null) {
+      // A bundled demo asset (see seedDemo()) is a local path, not an
+      // http(s) URL — a real Core-backed clip's mediaUrl always comes from
+      // HttpMediaCatalogService and is always http(s).
+      controller = url.startsWith('assets/')
+          ? VideoPlayerController.asset(url)
+          : VideoPlayerController.networkUrl(Uri.parse(url));
+    } else {
+      return;
+    }
     setState(() => _player = controller);
     try {
       await controller.initialize();
@@ -486,10 +566,15 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final clip = widget.clip;
     return Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
+      // Scrollable rather than a fixed-height Column: the upload-status
+      // row (retry/cancel) is new content that can push total height past
+      // the sheet's available space on a short viewport — scrolling avoids
+      // a real overflow rather than trusting every combination of clip
+      // state to fit unscrolled.
+      child: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -498,7 +583,12 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
               aspectRatio: _player!.value.aspectRatio,
               child: VideoPlayer(_player!),
             )
-          else if (_hasRealMedia)
+          else if (_hasLocalPhoto)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.file(File(clip.localPath!), height: 180, fit: BoxFit.cover),
+            )
+          else if (_hasRealMedia || _hasLocalVideo)
             SizedBox(
               height: 44,
               child: OutlinedButton.icon(
@@ -531,7 +621,16 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
                 Text('Signed on Vision · GPS attached', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright)),
               ]),
             ),
-          if (!_hasRealMedia)
+          if (clip.localPath != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Text(
+                'Imported from this phone — plays locally; not downloadable or '
+                'shareable as a link unless cloud upload is available.',
+                style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
+              ),
+            )
+          else if (!_hasRealMedia)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Text(
@@ -549,6 +648,10 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
                 style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
               ),
             ),
+          if (clip.localPath != null) ...[
+            const SizedBox(height: 10),
+            _UploadStatusRow(clip: clip, repository: widget.repository),
+          ],
           const SizedBox(height: 16),
           Row(children: [
             Expanded(
@@ -575,8 +678,47 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
             ),
           ]),
         ],
+        ),
       ),
     );
+  }
+}
+
+/// Real retry/cancel controls for a phone-imported clip's upload state —
+/// wired to the app-wide [MediaUploadService], the same one
+/// [ClipRepository.importPicked] used originally. Retry calls
+/// [ClipRepository.startUpload] again; since the shipped
+/// NoOpMediaUploadService reports `isAvailable == false`, these controls
+/// stay honestly absent in production until a real backend exists — see
+/// media_upload_service.dart.
+class _UploadStatusRow extends StatelessWidget {
+  final Clip clip;
+  final ClipRepository repository;
+  const _UploadStatusRow({required this.clip, required this.repository});
+
+  @override
+  Widget build(BuildContext context) {
+    final uploader = context.read<MediaUploadService>();
+    if (!uploader.isAvailable && clip.uploadStatus == UploadStatus.onPhoneOnly) {
+      return const Text(
+        'Cloud upload isn\'t available yet — this stays on this phone only.',
+        style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11.5),
+      );
+    }
+    return Row(children: [
+      _UploadStatusBadge(clip: clip),
+      const Spacer(),
+      if (clip.uploadStatus == UploadStatus.uploading)
+        TextButton(
+          onPressed: () => repository.cancelUpload(clip.id),
+          child: const Text('Cancel'),
+        ),
+      if (clip.uploadStatus == UploadStatus.failed)
+        TextButton(
+          onPressed: () => repository.startUpload(clip.id, uploader),
+          child: const Text('Retry'),
+        ),
+    ]);
   }
 }
 
@@ -680,6 +822,34 @@ class _KindBadge extends StatelessWidget {
   }
 }
 
+/// Shown only for phone-imported media ([Clip.localPath] set) — a Core-
+/// fetched or demo-seeded clip never shows an upload state at all, since
+/// it was never something this app itself uploaded.
+class _UploadStatusBadge extends StatelessWidget {
+  final Clip clip;
+  const _UploadStatusBadge({required this.clip});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (clip.uploadStatus) {
+      UploadStatus.onPhoneOnly => ('ON THIS PHONE', BinnacleColors.slateLight),
+      UploadStatus.uploading =>
+        ('UPLOADING ${((clip.uploadProgress ?? 0) * 100).round()}%', BinnacleColors.tealBright),
+      UploadStatus.uploaded => ('UPLOADED', BinnacleColors.tealBright),
+      UploadStatus.failed => ('UPLOAD FAILED', BinnacleColors.orange),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: BinnacleColors.navyDeep.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Text(label, style: BinnacleTheme.mono(size: 8, color: color, weight: FontWeight.w700)),
+    );
+  }
+}
+
 /// The most recent clip gets a full-width, larger "now playing" treatment —
 /// the same instinct as a video app's "continue watching" hero, instead of
 /// treating every clip as an identically-sized grid tile.
@@ -725,6 +895,10 @@ class _HeroClipCard extends StatelessWidget {
                     ),
                     child: Text('LATEST', style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.tealBright, weight: FontWeight.w700)),
                   ),
+                  if (clip.localPath != null) ...[
+                    const SizedBox(width: 6),
+                    _UploadStatusBadge(clip: clip),
+                  ],
                 ]),
               ),
               Positioned(
@@ -803,6 +977,8 @@ class _ClipCard extends StatelessWidget {
             if (clip.kind != ClipKind.photo)
               const Center(child: Icon(Icons.play_arrow_rounded, color: Colors.white54, size: 30)),
             Positioned(top: 6, left: 6, child: _KindBadge(kind: clip.kind)),
+            if (clip.localPath != null)
+              Positioned(bottom: 34, left: 6, child: _UploadStatusBadge(clip: clip)),
             Positioned(top: 4, right: 4, child: _FavoriteButton(favorite: clip.favorite, onTap: onFavorite, small: true)),
             Positioned(
               left: 0,

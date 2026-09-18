@@ -31,6 +31,37 @@ Future<Clip?> pickAndImportMedia(
   final uploader = context.read<MediaUploadService>();
   final repo = context.read<ClipRepository>();
 
+  // One real guard shared by every entry point (Library, Best Falls,
+  // Community) — a duplicate tap while a pick/import is already running
+  // is ignored outright rather than starting a second concurrent import.
+  if (repo.importing) return null;
+  repo.setImporting(true);
+  try {
+    return await _runImportFlow(
+      context,
+      kind: kind,
+      importer: importer,
+      uploader: uploader,
+      repo: repo,
+      kindOverride: kindOverride,
+      titleOverride: titleOverride,
+      riderId: riderId,
+    );
+  } finally {
+    repo.setImporting(false);
+  }
+}
+
+Future<Clip?> _runImportFlow(
+  BuildContext context, {
+  required ImportMediaKind kind,
+  required MediaImportService importer,
+  required MediaUploadService uploader,
+  required ClipRepository repo,
+  ClipKind? kindOverride,
+  String? titleOverride,
+  String? riderId,
+}) async {
   PickedMedia? picked;
   try {
     picked = kind == ImportMediaKind.photo ? await importer.pickPhoto() : await importer.pickVideo();
