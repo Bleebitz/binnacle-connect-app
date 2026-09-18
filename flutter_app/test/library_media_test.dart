@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:binnacle_connect/core/models/clip.dart';
 import 'package:binnacle_connect/core/services/media_import_service.dart';
 import 'package:binnacle_connect/core/services/media_upload_service.dart';
+import 'package:binnacle_connect/ui/screens/crew_screen.dart' show CrewRepository;
 import 'package:binnacle_connect/ui/screens/library_screen.dart';
 import 'package:binnacle_connect/ui/theme/binnacle_theme.dart';
 
@@ -28,6 +29,9 @@ Widget _harness({
       ChangeNotifierProvider<ClipRepository>.value(value: clips),
       Provider<MediaImportService>.value(value: importer),
       Provider<MediaUploadService>.value(value: uploader),
+      // The detail sheet's session-assignment picker (real, manual
+      // tagging — see ClipRepository.assignToSession) reads CrewRepository.
+      ChangeNotifierProvider<CrewRepository>(create: (_) => CrewRepository()),
     ],
     child: MaterialApp(theme: BinnacleTheme.dark(), home: LibraryScreen(repository: clips)),
   );

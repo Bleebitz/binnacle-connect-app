@@ -19,6 +19,7 @@ import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
 import '../widgets/media_import_sheet.dart';
+import 'crew_screen.dart' show CrewRepository;
 import 'highlight_editor_screen.dart';
 
 /// Clip store. Demo mode is a local, in-memory scaffold ([seedDemo]/
@@ -388,6 +389,19 @@ class ClipRepository extends ChangeNotifier {
     if (i == -1) return;
     _clips[i] = _clips[i].copyWith(riderId: riderId);
     notifyListeners();
+  }
+
+  /// Manual session tagging — always an explicit user action (this
+  /// method's only caller is a UI picker), never inferred from timing or
+  /// location. Passing null explicitly returns the clip to "Unassigned."
+  /// Distinct from any future machine-identified grouping, which would
+  /// need its own, clearly-labeled field rather than overloading this one.
+  void assignToSession(String clipId, String? sessionId) {
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    _clips[i] = _clips[i].copyWith(sessionId: sessionId, clearSessionId: sessionId == null);
+    notifyListeners();
+    if (_clips[i].localPath != null) unawaited(_persistImported());
   }
 
   /// Set when Community's Post a highlight flow publishes this clip —
@@ -867,6 +881,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
             const SizedBox(height: 10),
             _UploadStatusRow(clip: clip, repository: widget.repository),
           ],
+          const SizedBox(height: 10),
+          _SessionAssignmentRow(clip: clip, repository: widget.repository),
           const SizedBox(height: 16),
           Row(children: [
             Expanded(
@@ -915,6 +931,37 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
         ),
       ),
     );
+  }
+}
+
+/// Manual session tagging (see ClipRepository.assignToSession) — always
+/// an explicit pick from this dropdown, never inferred. "Unassigned" is
+/// a real, first-class option, not just an absence of a badge.
+class _SessionAssignmentRow extends StatelessWidget {
+  final Clip clip;
+  final ClipRepository repository;
+  const _SessionAssignmentRow({required this.clip, required this.repository});
+
+  @override
+  Widget build(BuildContext context) {
+    final sessions = context.watch<CrewRepository>().sessions;
+    return Row(children: [
+      const Icon(Icons.directions_boat_filled_outlined, size: 16, color: BinnacleColors.slateLight),
+      const SizedBox(width: 8),
+      const Text('Session', style: TextStyle(fontSize: 12, color: BinnacleColors.slateLight)),
+      const Spacer(),
+      DropdownButton<String?>(
+        value: clip.sessionId,
+        hint: const Text('Unassigned', style: TextStyle(fontSize: 12)),
+        underline: const SizedBox.shrink(),
+        items: [
+          const DropdownMenuItem<String?>(value: null, child: Text('Unassigned')),
+          for (final session in sessions)
+            DropdownMenuItem<String?>(value: session.id, child: Text(session.label)),
+        ],
+        onChanged: (sessionId) => repository.assignToSession(clip.id, sessionId),
+      ),
+    ]);
   }
 }
 
