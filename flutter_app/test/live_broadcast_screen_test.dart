@@ -110,6 +110,11 @@ void main() {
     final goLive = find.text('GO LIVE');
     await scrollUntilVisibleWithin(tester, LiveBroadcastScreen, goLive);
     await tester.tap(goLive);
+    await tester.pumpAndSettle(); // pre-stream check screen runs its checks
+
+    // The pre-stream check itself must never optimistically start a
+    // broadcast — only tapping "Start broadcast" does.
+    await tester.tap(find.text('Start broadcast'));
     await tester.pump(); // one frame: must show pending, not Live
 
     // The session exists (the screen has already switched from setup to

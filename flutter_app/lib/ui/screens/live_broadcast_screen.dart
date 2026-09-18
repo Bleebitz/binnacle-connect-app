@@ -12,6 +12,7 @@ import '../../core/services/connected_services.dart';
 import '../../core/services/entitlement_service.dart';
 import '../../core/services/live_broadcast_service.dart';
 import '../theme/binnacle_theme.dart';
+import 'pre_stream_check_screen.dart';
 
 class LiveBroadcastScreen extends StatefulWidget {
   const LiveBroadcastScreen({super.key});
@@ -111,7 +112,14 @@ class _LiveBroadcastScreenState extends State<LiveBroadcastScreen> {
                 error: live.lastError,
                 onGoLive: _selected.isEmpty || live.busy
                     ? null
-                    : () => live.goLive(view: _view, destinations: _selected.toList(), entitlement: entitlement),
+                    : () => Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => PreStreamCheckScreen(
+                            view: _view,
+                            destinations: _selected.toList(),
+                            onStartBroadcast: () =>
+                                live.goLive(view: _view, destinations: _selected.toList(), entitlement: entitlement),
+                          ),
+                        )),
               )
             else
               _HealthPanel(session: live.session!, busy: live.busy, error: live.lastError, onStop: live.stop),
