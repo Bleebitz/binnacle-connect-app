@@ -2,11 +2,15 @@
 // counter-app test that `flutter create` generates by default, which
 // referenced a nonexistent MyApp class and tested nothing about this app.
 
+import 'package:connectivity_plus_platform_interface/connectivity_plus_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:binnacle_connect/main.dart';
 import 'package:binnacle_connect/ui/widgets/connect_startup.dart';
+
+import 'support/fake_media_services.dart';
 
 void main() {
   setUp(() {
@@ -28,6 +32,11 @@ void main() {
     // channel so that read doesn't hit a real (nonexistent, in a test
     // binding) secure storage implementation.
     FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    // ClipRepository's offline upload queue checks real connectivity on
+    // startup — fake the platform so that's a real quick call, not a hang
+    // against a platform channel this test binding never registers.
+    ConnectivityPlatform.instance = FakeConnectivityPlatform();
   });
 
   tearDown(() => ConnectStartup.debugSkipForTesting = false);

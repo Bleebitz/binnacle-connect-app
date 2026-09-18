@@ -126,18 +126,32 @@ class BinnacleConnectApp extends StatelessWidget {
           if (AppConfig.isDemo) telemetry.startSimulated();
           return telemetry;
         }),
+        // Real system photo/video picker + local copy — see
+        // media_import_service.dart. Registered under the abstract type
+        // for the same reason as EntitlementService above. Declared
+        // *before* ClipRepository below so ClipRepository's own create
+        // callback can read it via context (a sibling provider declared
+        // earlier in this list is an ancestor of the rest, not the other
+        // way around).
+        Provider<MediaImportService>(create: (_) => ImagePickerMediaImportService()),
+        // No cloud upload backend exists yet (BIN-41/BIN-48 both Todo) —
+        // see media_upload_service.dart's module comment for why this
+        // stays NoOp rather than guessing an endpoint.
+        Provider<MediaUploadService>(create: (_) => NoOpMediaUploadService()),
+
         // ProxyProvider2 so a real Core connection triggers exactly one real
         // catalog fetch — same idempotent-guard pattern as
         // ControlChannelService.connect() above (guard on a "already tried"
         // flag rather than re-triggering every rebuild).
         ChangeNotifierProxyProvider2<PairingService, ControlChannelService,
             ClipRepository>(
-          create: (_) {
-            final clips = ClipRepository();
+          create: (context) {
+            final clips = ClipRepository(uploader: context.read<MediaUploadService>());
             // Phone-imported media is independent of demo/Core mode — a
             // real local file the user picked, not fetched from anywhere
             // — so it's restored before/alongside either seed path rather
-            // than gated on AppConfig.isDemo.
+            // than gated on AppConfig.isDemo. hydrate() also starts the
+            // real offline-upload-queue's connectivity subscription.
             unawaited(clips.hydrate());
             if (AppConfig.isDemo) clips.seedDemo();
             return clips;
@@ -162,15 +176,6 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WakeRepository()),
         ChangeNotifierProvider(create: (_) => TrickRepository()),
         ChangeNotifierProvider(create: (_) => FallRepository()),
-
-        // Real system photo/video picker + local copy — see
-        // media_import_service.dart. Registered under the abstract type
-        // for the same reason as EntitlementService above.
-        Provider<MediaImportService>(create: (_) => ImagePickerMediaImportService()),
-        // No cloud upload backend exists yet (BIN-41/BIN-48 both Todo) —
-        // see media_upload_service.dart's module comment for why this
-        // stays NoOp rather than guessing an endpoint.
-        Provider<MediaUploadService>(create: (_) => NoOpMediaUploadService()),
 
         // Connect Live (BIN-38). EntitlementService is the injectable
         // entitlement boundary — StaticEntitlementService always reports

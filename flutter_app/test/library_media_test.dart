@@ -42,8 +42,10 @@ void main() {
 
   testWidgets('Add media -> pick photo -> preview -> confirm shows it as "on this phone"', (tester) async {
     final importer = FakeMediaImportService();
-    final clips = ClipRepository();
-    await tester.pumpWidget(_harness(importer: importer, uploader: NoOpMediaUploadService(), clips: clips));
+    final uploader = NoOpMediaUploadService();
+    final clips = ClipRepository(connectivity: FakeConnectivityChecker(), uploader: uploader);
+    await clips.hydrate();
+    await tester.pumpWidget(_harness(importer: importer, uploader: uploader, clips: clips));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byIcon(Icons.add_photo_alternate_outlined));
@@ -63,8 +65,10 @@ void main() {
   testWidgets('a duplicate tap while importing is already running does not start a second import',
       (tester) async {
     final importer = FakeMediaImportService();
-    final clips = ClipRepository();
-    await tester.pumpWidget(_harness(importer: importer, uploader: NoOpMediaUploadService(), clips: clips));
+    final uploader = NoOpMediaUploadService();
+    final clips = ClipRepository(connectivity: FakeConnectivityChecker(), uploader: uploader);
+    await clips.hydrate();
+    await tester.pumpWidget(_harness(importer: importer, uploader: uploader, clips: clips));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byIcon(Icons.add_photo_alternate_outlined));
@@ -89,7 +93,8 @@ void main() {
       (tester) async {
     final importer = FakeMediaImportService();
     final uploader = FakeProgressUploadService();
-    final clips = ClipRepository();
+    final clips = ClipRepository(connectivity: FakeConnectivityChecker(), uploader: uploader);
+    await clips.hydrate();
     await tester.pumpWidget(_harness(importer: importer, uploader: uploader, clips: clips));
     await tester.pumpAndSettle();
 
@@ -107,7 +112,8 @@ void main() {
   testWidgets('a failed upload shows Retry, and Retry genuinely restarts the upload', (tester) async {
     final importer = FakeMediaImportService();
     final uploader = FakeProgressUploadService()..failNext = true;
-    final clips = ClipRepository();
+    final clips = ClipRepository(connectivity: FakeConnectivityChecker(), uploader: uploader);
+    await clips.hydrate();
     await tester.pumpWidget(_harness(importer: importer, uploader: uploader, clips: clips));
     await tester.pumpAndSettle();
 
@@ -133,8 +139,10 @@ void main() {
 
   testWidgets('imported media persists across a simulated app restart', (tester) async {
     final importer = FakeMediaImportService();
-    final clipsA = ClipRepository();
-    await tester.pumpWidget(_harness(importer: importer, uploader: NoOpMediaUploadService(), clips: clipsA));
+    final uploaderA = NoOpMediaUploadService();
+    final clipsA = ClipRepository(connectivity: FakeConnectivityChecker(), uploader: uploaderA);
+    await clipsA.hydrate();
+    await tester.pumpWidget(_harness(importer: importer, uploader: uploaderA, clips: clipsA));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.add_photo_alternate_outlined));
     await tester.pumpAndSettle();
@@ -148,7 +156,7 @@ void main() {
     // from the real local store (SharedPreferences.setMockInitialValues
     // above makes this the same underlying storage across both instances
     // within one test, exactly like a real restart in the same install).
-    final clipsB = ClipRepository();
+    final clipsB = ClipRepository(connectivity: FakeConnectivityChecker());
     await clipsB.hydrate();
     expect(clipsB.clips, hasLength(1));
     expect(clipsB.clips.single.id, clipsA.clips.single.id);

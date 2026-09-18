@@ -8,11 +8,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../core/app_config.dart';
 import '../../core/models/clip.dart';
+import '../../core/services/connectivity_checker.dart';
 import '../../core/services/library_local_store.dart';
 import '../../core/services/media_catalog_service.dart';
 import '../../core/services/media_import_service.dart';
 import '../../core/services/media_upload_service.dart';
 import '../../core/services/pairing_service.dart';
+import '../../core/services/upload_preferences_service.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass_sheet.dart';
@@ -27,10 +29,30 @@ import '../widgets/media_import_sheet.dart';
 class ClipRepository extends ChangeNotifier {
   final List<Clip> _clips = [];
   final LibraryLocalStore _localStore;
+  final MediaUploadService _uploader;
+  final UploadPreferencesService _uploadPrefs;
+  final ConnectivityChecker _connectivity;
   final Map<String, StreamSubscription<UploadProgressUpdate>> _uploads = {};
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
-  ClipRepository({LibraryLocalStore? localStore})
-      : _localStore = localStore ?? SharedPreferencesLibraryLocalStore();
+  UploadNetworkPreference _networkPreference = UploadNetworkPreference.wifiOnly;
+  UploadNetworkPreference get uploadNetworkPreference => _networkPreference;
+
+  /// Real, current-at-last-check connectivity — surfaced so the queue UI
+  /// can show "waiting for Wi-Fi" vs. "waiting for any connection" rather
+  /// than an unexplained "queued."
+  List<ConnectivityResult> _lastConnectivity = const [ConnectivityResult.none];
+  List<ConnectivityResult> get lastConnectivity => _lastConnectivity;
+
+  ClipRepository({
+    LibraryLocalStore? localStore,
+    MediaUploadService? uploader,
+    UploadPreferencesService? uploadPreferences,
+    ConnectivityChecker? connectivity,
+  })  : _localStore = localStore ?? SharedPreferencesLibraryLocalStore(),
+        _uploader = uploader ?? NoOpMediaUploadService(),
+        _uploadPrefs = uploadPreferences ?? UploadPreferencesService(),
+        _connectivity = connectivity ?? RealConnectivityChecker();
 
   List<Clip> get clips => List.unmodifiable(_clips);
 
@@ -56,9 +78,52 @@ class ClipRepository extends ChangeNotifier {
   /// rather than only after the next add.
   Future<void> hydrate() async {
     final restored = await _localStore.loadImported();
-    if (restored.isEmpty) return;
-    _clips.insertAll(0, restored);
+    if (restored.isNotEmpty) {
+      _clips.insertAll(0, restored);
+      notifyListeners();
+    }
+    _networkPreference = await _uploadPrefs.load();
+    // Real, current-at-startup connectivity, then a live subscription — an
+    // item left `queued` from a prior session (e.g. the app was closed
+    // mid-queue) is picked up as soon as a matching connection is seen,
+    // without the user needing to open the app on Wi-Fi and re-trigger
+    // anything by hand.
+    _lastConnectivity = await _connectivity.check();
+    _connectivitySub = _connectivity.onChanged.listen(_onConnectivityChanged);
+    _processQueue();
+  }
+
+  Future<void> setUploadNetworkPreference(UploadNetworkPreference preference) async {
+    _networkPreference = preference;
+    await _uploadPrefs.save(preference);
     notifyListeners();
+    _processQueue();
+  }
+
+  void _onConnectivityChanged(List<ConnectivityResult> results) {
+    _lastConnectivity = results;
+    notifyListeners(); // queue UI's "waiting for..." text depends on this
+    _processQueue();
+  }
+
+  bool get _connectivitySatisfiesPreference {
+    final hasWifi = _lastConnectivity.contains(ConnectivityResult.wifi) ||
+        _lastConnectivity.contains(ConnectivityResult.ethernet);
+    final hasCellular = _lastConnectivity.contains(ConnectivityResult.mobile);
+    return _networkPreference == UploadNetworkPreference.wifiOnly ? hasWifi : (hasWifi || hasCellular);
+  }
+
+  /// Starts a real attempt for every `queued` clip, if the current
+  /// connection matches the user's Wi-Fi/cellular preference. Called on
+  /// every connectivity change, on preference change, and once at
+  /// startup — this IS the offline queue: items just sit in `queued`
+  /// until this finds a satisfying connection, including across an app
+  /// restart (queued state is persisted).
+  void _processQueue() {
+    if (!_uploader.isAvailable || !_connectivitySatisfiesPreference) return;
+    for (final clip in List<Clip>.from(_clips)) {
+      if (clip.uploadStatus == UploadStatus.queued) _beginUploadAttempt(clip.id);
+    }
   }
 
   Future<void> _persistImported() async {
@@ -68,15 +133,18 @@ class ClipRepository extends ChangeNotifier {
   /// Real pick -> preview is handled by the caller (UI) via [importer]
   /// directly, since cancelling a preview must never touch the Library at
   /// all. This is called only once the user has confirmed. Copies the
-  /// picked file into durable app storage, adds a real Clip in
-  /// [UploadStatus.onPhoneOnly], persists it, and — only if [uploader] is
-  /// available — kicks off a real upload with progress/cancel/retry.
-  /// Throws [MediaImportException] on a real copy failure; never adds a
-  /// broken/partial entry on failure.
+  /// picked file into durable app storage, adds a real Clip, and enters it
+  /// into the offline upload queue — `queued` if upload is available at
+  /// all, `onPhoneOnly` if not (so the UI doesn't show a queue state that
+  /// can never resolve). Entering the queue rather than uploading
+  /// immediately is what makes "select while offline, upload when
+  /// connectivity returns" work: [_processQueue] picks it up the moment a
+  /// satisfying connection is seen, which may be immediately if one
+  /// already exists. Throws [MediaImportException] on a real copy
+  /// failure; never adds a broken/partial entry on failure.
   Future<Clip> importPicked(
     PickedMedia media, {
     required MediaImportService importer,
-    required MediaUploadService uploader,
     String? riderId,
     ClipKind? kindOverride,
     String? titleOverride,
@@ -91,33 +159,55 @@ class ClipRepository extends ChangeNotifier {
       riderId: riderId ?? 'me',
       capturedAt: DateTime.now(),
       localPath: localPath,
-      uploadStatus: UploadStatus.onPhoneOnly,
+      sizeBytes: media.sizeBytes,
+      uploadStatus: _uploader.isAvailable ? UploadStatus.queued : UploadStatus.onPhoneOnly,
       signed: false,
       gpsAttached: false,
     );
     add(clip);
     await _persistImported();
-    if (uploader.isAvailable) startUpload(clip.id, uploader);
+    _processQueue();
     return clip;
   }
 
-  /// Starts (or retries) a real upload for an already-imported clip.
-  /// Cancelling via [cancelUpload] stops the underlying stream — a real
-  /// unsubscribe, not just a UI-side flag — so no further progress/result
-  /// for that upload is applied after cancellation.
-  void startUpload(String clipId, MediaUploadService uploader) {
+  /// The real attempt-runner: checks for a missing source file itself
+  /// (a real `File.exists()` check — this is the one failure mode this
+  /// repository detects locally, before ever asking [_uploader]), then
+  /// starts the upload and applies progress/outcome updates as they
+  /// arrive. Cancelling via [cancelUpload]/[pauseUpload] stops the
+  /// underlying stream — a real unsubscribe, not just a UI-side flag — so
+  /// no further progress/result is applied after cancellation. Never
+  /// marks a clip `uploaded` except on a real [UploadOutcome.uploaded]
+  /// from the service — that's the server-confirmation requirement, not
+  /// "we sent some bytes."
+  void _beginUploadAttempt(String clipId) {
     _uploads[clipId]?.cancel();
     final i = _clips.indexWhere((c) => c.id == clipId);
     if (i == -1) return;
+    final localPath = _clips[i].localPath;
+    if (localPath == null) return;
+    if (!File(localPath).existsSync()) {
+      _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.failed, uploadProgress: null);
+      _lastFailureReason[clipId] = UploadFailureReason.missingSourceFile;
+      _lastFailureMessage[clipId] = 'The original file is no longer on this phone.';
+      notifyListeners();
+      unawaited(_persistImported());
+      return;
+    }
     _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.uploading, uploadProgress: 0);
+    _lastFailureReason.remove(clipId);
+    _lastFailureMessage.remove(clipId);
     notifyListeners();
-    final localPath = _clips[i].localPath!;
-    _uploads[clipId] = uploader.upload(localPath: localPath, mediaId: clipId).listen((update) {
+    _uploads[clipId] = _uploader.upload(localPath: localPath, mediaId: clipId).listen((update) {
       final idx = _clips.indexWhere((c) => c.id == clipId);
       if (idx == -1) return;
       if (update.outcome == null) {
         _clips[idx] = _clips[idx].copyWith(uploadProgress: update.fraction);
       } else {
+        // Duplicate-post guard: once real server confirmation has marked
+        // this clip `uploaded`, nothing re-enters the queue for it (see
+        // enqueueUpload/retryUpload's early-return below) — a retry after
+        // this point would need a genuinely new outcome to change status.
         _clips[idx] = _clips[idx].copyWith(
           uploadStatus: switch (update.outcome!) {
             UploadOutcome.uploaded => UploadStatus.uploaded,
@@ -126,6 +216,13 @@ class ClipRepository extends ChangeNotifier {
           },
           uploadProgress: null,
         );
+        if (update.outcome != UploadOutcome.uploaded) {
+          _lastFailureReason[clipId] = update.failureReason ?? UploadFailureReason.unknown;
+          _lastFailureMessage[clipId] = update.message;
+        } else {
+          _lastFailureReason.remove(clipId);
+          _lastFailureMessage.remove(clipId);
+        }
         _uploads.remove(clipId);
         unawaited(_persistImported());
       }
@@ -133,11 +230,65 @@ class ClipRepository extends ChangeNotifier {
     });
   }
 
+  /// Why the given clip's upload last failed — null if it never has, or
+  /// if it's since succeeded/been re-queued. Real, structured detail
+  /// (see [UploadFailureReason]) rather than only a free-text message.
+  final Map<String, UploadFailureReason> _lastFailureReason = {};
+  final Map<String, String?> _lastFailureMessage = {};
+  UploadFailureReason? failureReasonFor(String clipId) => _lastFailureReason[clipId];
+  String? failureMessageFor(String clipId) => _lastFailureMessage[clipId];
+
+  /// Real, immediate attempt-or-queue for a clip already in [UploadStatus.onPhoneOnly]
+  /// or [UploadStatus.failed] — e.g. the user turned cloud upload on later,
+  /// or is manually retrying. A no-op if already queued/uploading/uploaded
+  /// (duplicate-enqueue guard) — this is what "prevent duplicate uploads"
+  /// means at the repository level, not just a disabled button.
+  void enqueueUpload(String clipId) {
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    final status = _clips[i].uploadStatus;
+    if (status == UploadStatus.queued || status == UploadStatus.uploading || status == UploadStatus.uploaded) {
+      return;
+    }
+    _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.queued, uploadProgress: null);
+    notifyListeners();
+    unawaited(_persistImported());
+    _processQueue();
+  }
+
+  /// User-requested retry — same real re-entry into the queue as
+  /// [enqueueUpload], named for what the Retry button in the UI means.
+  void retryUpload(String clipId) => enqueueUpload(clipId);
+
+  /// User-requested resume for a [UploadStatus.paused] clip — re-enters
+  /// the queue exactly like [enqueueUpload]; [_processQueue] starts it
+  /// immediately if the connection already satisfies the preference.
+  void resumeUpload(String clipId) => enqueueUpload(clipId);
+
+  /// Pauses a real in-flight or queued upload — a genuine unsubscribe
+  /// from the upload stream (any real network activity stops), not a
+  /// UI-only flag; distinct from [cancelUpload], which the UI reserves
+  /// for "give up," since a paused item stays ready to [resumeUpload].
+  void pauseUpload(String clipId) {
+    _uploads.remove(clipId)?.cancel();
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    if (_clips[i].uploadStatus != UploadStatus.uploading && _clips[i].uploadStatus != UploadStatus.queued) return;
+    _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.paused, uploadProgress: null);
+    notifyListeners();
+    unawaited(_persistImported());
+  }
+
   void cancelUpload(String clipId) {
     _uploads.remove(clipId)?.cancel();
     final i = _clips.indexWhere((c) => c.id == clipId);
     if (i == -1) return;
-    _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.failed, uploadProgress: null);
+    // Cancelling the upload never touches the original file (localPath) —
+    // it only stops the upload attempt. The clip stays in the Library as
+    // on-phone-only media.
+    _clips[i] = _clips[i].copyWith(uploadStatus: UploadStatus.onPhoneOnly, uploadProgress: null);
+    _lastFailureReason.remove(clipId);
+    _lastFailureMessage.remove(clipId);
     notifyListeners();
     unawaited(_persistImported());
   }
@@ -147,6 +298,7 @@ class ClipRepository extends ChangeNotifier {
     for (final sub in _uploads.values) {
       sub.cancel();
     }
+    _connectivitySub?.cancel();
     super.dispose();
   }
 
@@ -699,13 +851,12 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   }
 }
 
-/// Real retry/cancel controls for a phone-imported clip's upload state —
-/// wired to the app-wide [MediaUploadService], the same one
-/// [ClipRepository.importPicked] used originally. Retry calls
-/// [ClipRepository.startUpload] again; since the shipped
-/// NoOpMediaUploadService reports `isAvailable == false`, these controls
-/// stay honestly absent in production until a real backend exists — see
-/// media_upload_service.dart.
+/// Real pause/resume/cancel/retry controls for a phone-imported clip's
+/// place in the offline upload queue — see ClipRepository's
+/// enqueueUpload/pauseUpload/resumeUpload/retryUpload/cancelUpload. Since
+/// the shipped NoOpMediaUploadService reports `isAvailable == false`,
+/// these controls stay honestly absent in production until a real
+/// backend exists — see media_upload_service.dart.
 class _UploadStatusRow extends StatelessWidget {
   final Clip clip;
   final ClipRepository repository;
@@ -720,18 +871,53 @@ class _UploadStatusRow extends StatelessWidget {
         style: TextStyle(color: BinnacleColors.slateDim, fontSize: 11.5),
       );
     }
-    return Row(children: [
-      _UploadStatusBadge(clip: clip),
-      const Spacer(),
-      if (clip.uploadStatus == UploadStatus.uploading)
-        TextButton(
-          onPressed: () => repository.cancelUpload(clip.id),
-          child: const Text('Cancel'),
+    final failureMessage = repository.failureMessageFor(clip.id);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        _UploadStatusBadge(clip: clip),
+        const Spacer(),
+        if (clip.uploadStatus == UploadStatus.queued || clip.uploadStatus == UploadStatus.uploading)
+          TextButton(
+            onPressed: () => repository.pauseUpload(clip.id),
+            child: const Text('Pause'),
+          ),
+        if (clip.uploadStatus == UploadStatus.paused)
+          TextButton(
+            onPressed: () => repository.resumeUpload(clip.id),
+            child: const Text('Resume'),
+          ),
+        if (clip.uploadStatus == UploadStatus.queued ||
+            clip.uploadStatus == UploadStatus.uploading ||
+            clip.uploadStatus == UploadStatus.paused)
+          TextButton(
+            onPressed: () => repository.cancelUpload(clip.id),
+            child: const Text('Cancel'),
+          ),
+        if (clip.uploadStatus == UploadStatus.failed)
+          TextButton(
+            onPressed: () => repository.retryUpload(clip.id),
+            child: const Text('Retry'),
+          ),
+        if (clip.uploadStatus == UploadStatus.onPhoneOnly && uploader.isAvailable)
+          TextButton(
+            onPressed: () => repository.enqueueUpload(clip.id),
+            child: const Text('Upload'),
+          ),
+      ]),
+      if (clip.uploadStatus == UploadStatus.failed && failureMessage != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(failureMessage, style: const TextStyle(color: BinnacleColors.orange, fontSize: 11.5)),
         ),
-      if (clip.uploadStatus == UploadStatus.failed)
-        TextButton(
-          onPressed: () => repository.startUpload(clip.id, uploader),
-          child: const Text('Retry'),
+      if (clip.uploadStatus == UploadStatus.queued && !repository._connectivitySatisfiesPreference)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            repository.uploadNetworkPreference == UploadNetworkPreference.wifiOnly
+                ? 'Waiting for Wi-Fi (set to cellular in Settings if you want to upload now).'
+                : 'Waiting for a connection.',
+            style: const TextStyle(color: BinnacleColors.slateDim, fontSize: 11.5),
+          ),
         ),
     ]);
   }
@@ -848,8 +1034,10 @@ class _UploadStatusBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final (label, color) = switch (clip.uploadStatus) {
       UploadStatus.onPhoneOnly => ('ON THIS PHONE', BinnacleColors.slateLight),
+      UploadStatus.queued => ('QUEUED', BinnacleColors.amber),
       UploadStatus.uploading =>
         ('UPLOADING ${((clip.uploadProgress ?? 0) * 100).round()}%', BinnacleColors.tealBright),
+      UploadStatus.paused => ('PAUSED', BinnacleColors.slateLight),
       UploadStatus.uploaded => ('UPLOADED', BinnacleColors.tealBright),
       UploadStatus.failed => ('UPLOAD FAILED', BinnacleColors.orange),
     };

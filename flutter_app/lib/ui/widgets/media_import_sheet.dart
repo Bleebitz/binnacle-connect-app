@@ -12,7 +12,6 @@ import 'package:provider/provider.dart';
 
 import '../../core/models/clip.dart';
 import '../../core/services/media_import_service.dart';
-import '../../core/services/media_upload_service.dart';
 import '../screens/library_screen.dart' show ClipRepository;
 import '../theme/binnacle_theme.dart';
 
@@ -28,7 +27,6 @@ Future<Clip?> pickAndImportMedia(
   String? riderId,
 }) async {
   final importer = context.read<MediaImportService>();
-  final uploader = context.read<MediaUploadService>();
   final repo = context.read<ClipRepository>();
 
   // One real guard shared by every entry point (Library, Best Falls,
@@ -41,7 +39,6 @@ Future<Clip?> pickAndImportMedia(
       context,
       kind: kind,
       importer: importer,
-      uploader: uploader,
       repo: repo,
       kindOverride: kindOverride,
       titleOverride: titleOverride,
@@ -56,7 +53,6 @@ Future<Clip?> _runImportFlow(
   BuildContext context, {
   required ImportMediaKind kind,
   required MediaImportService importer,
-  required MediaUploadService uploader,
   required ClipRepository repo,
   ClipKind? kindOverride,
   String? titleOverride,
@@ -84,7 +80,6 @@ Future<Clip?> _runImportFlow(
     final clip = await repo.importPicked(
       picked,
       importer: importer,
-      uploader: uploader,
       kindOverride: kindOverride,
       titleOverride: titleOverride,
       riderId: riderId,

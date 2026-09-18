@@ -2,13 +2,17 @@
 // destination selection, and the full pending -> connecting -> live UI
 // transition using the real (demo) DemoBroadcastTransport timing.
 
+import 'package:connectivity_plus_platform_interface/connectivity_plus_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:binnacle_connect/main.dart';
 import 'package:binnacle_connect/ui/screens/capture_screen.dart';
 import 'package:binnacle_connect/ui/screens/live_broadcast_screen.dart';
 import 'package:binnacle_connect/ui/widgets/connect_startup.dart';
+
+import 'support/fake_media_services.dart';
 
 /// Every tab's screen — and every pushed route beneath the current one —
 /// stays mounted (see main.dart's _RootShell / Navigator), so
@@ -51,6 +55,8 @@ void main() {
     TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
     FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    ConnectivityPlatform.instance = FakeConnectivityPlatform();
   });
 
   tearDown(() => ConnectStartup.debugSkipForTesting = false);
