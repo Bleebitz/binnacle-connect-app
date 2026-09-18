@@ -131,8 +131,8 @@ void main() {
         videoAspectRatio: 16 / 9,
       );
       // content height = 900/(16/9) = 506.25; vertical bar on each side.
-      final expectedContentHeight = 900 / (16 / 9);
-      final expectedOffsetY = (900 - expectedContentHeight) / 2;
+      const expectedContentHeight = 900 / (16 / 9);
+      const expectedOffsetY = (900 - expectedContentHeight) / 2;
       expect(rect.top, closeTo(expectedOffsetY, 0.01));
       expect(rect.left, closeTo(0, 0.01));
       expect(rect.width, closeTo(900, 0.01));
@@ -146,8 +146,8 @@ void main() {
         canvasSize: const Size(1600, 900),
         videoAspectRatio: 9 / 16,
       );
-      final expectedContentWidth = 900 * (9 / 16);
-      final expectedOffsetX = (1600 - expectedContentWidth) / 2;
+      const expectedContentWidth = 900 * (9 / 16);
+      const expectedOffsetX = (1600 - expectedContentWidth) / 2;
       expect(rect.left, closeTo(expectedOffsetX, 0.01));
       expect(rect.top, closeTo(0, 0.01));
       expect(rect.height, closeTo(900, 0.01));
