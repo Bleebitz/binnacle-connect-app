@@ -40,24 +40,26 @@ void main() {
 
     test('moves through the deterministic acquisition timeline', () {
       expect(reducer.reduce(Duration.zero).phase, VisionTrackPhase.acquiring);
-      expect(reducer.reduce(const Duration(milliseconds: 1999)).phase,
+      expect(reducer.reduce(const Duration(milliseconds: 2999)).phase,
           VisionTrackPhase.acquiring);
-      expect(reducer.reduce(const Duration(seconds: 2)).phase,
+      expect(reducer.reduce(const Duration(seconds: 3)).phase,
           VisionTrackPhase.riderLocked);
-      expect(reducer.reduce(const Duration(seconds: 7)).phase,
-          VisionTrackPhase.occluded);
-      expect(reducer.reduce(const Duration(seconds: 9)).phase,
+      expect(reducer.reduce(const Duration(seconds: 15)).phase,
           VisionTrackPhase.tracking);
+      expect(reducer.reduce(const Duration(seconds: 121)).phase,
+          VisionTrackPhase.occluded);
+      expect(reducer.reduce(const Duration(seconds: 129)).phase,
+          VisionTrackPhase.acquiring);
     });
 
     test('source publishes reducer state from video position', () {
       final source = DemoRecordedCameraSource();
       addTearDown(source.dispose);
 
-      source.updatePlaybackPosition(const Duration(seconds: 8));
+      source.updatePlaybackPosition(const Duration(seconds: 125));
       expect(source.trackState.value, same(VisionTrackState.occluded));
 
-      source.updatePlaybackPosition(const Duration(seconds: 10));
+      source.updatePlaybackPosition(const Duration(seconds: 60));
       expect(source.trackState.value, same(VisionTrackState.tracking));
     });
   });

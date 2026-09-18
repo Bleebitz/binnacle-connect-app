@@ -15,16 +15,18 @@ Demo Mode selects a recorded Flutter asset and Core Mode selects the existing
 authenticated WebRTC service; the viewport, 16:9 center-crop behavior, HUD,
 and Vision/Track state presentation are shared.
 
-Demo Mode autoplays and loops the existing controlled GoPro development clip
-at `flutter_app/assets/demo/gopro_dev_footage.mp4`. Its introducing commit
-(`437df63`) records that the source was re-encoded to H.264 High / yuv420p and
-successfully played on the Samsung Galaxy S25 Ultra. No footage was fabricated
-or added for this change. The 12-second container duration was checked so all
-four simulated Track phases occur before each loop.
+Demo Mode autoplays and loops the controlled GoPro clip at
+`flutter_app/assets/demo/gopro_dev_footage.mp4`. The original placeholder was
+replaced after device review with a 130-second fixed-stern rider pass trimmed
+from the owner-supplied `GX010048.MP4` source (source time 09:50–12:00). The
+original 11.52 GB source is not committed. The bundled asset is a silent,
+1920×1080, 30 fps H.264 High 4:2:0 MP4 (82,092,098 bytes; SHA-256
+`6815DED40DD19E8E4A0CF1DB2C30B7EB9E04585029BC64D935C5C76FFDF33F8F`).
 
 The demo feed is persistently marked `DEMO — RECORDED CAMERA FEED`. A pure,
-video-position-driven reducer produces the simulated sequence `ACQUIRING
-RIDER` → `RIDER LOCKED` → `OCCLUDED · COASTING` → `TRACKING`. The live source
+video-position-driven reducer produces `ACQUIRING RIDER` → `RIDER LOCKED` →
+`TRACKING`, then aligns `OCCLUDED · COASTING` and reacquisition with the real
+fall/loss at the end of the pass. The live source
 uses the same state type and begins at `TRACK STATE UNAVAILABLE` until the
 Core/Vision Track-state schema is connected; WebRTC status is not misreported
 as rider state.
@@ -36,14 +38,21 @@ existing no-network guarantee.
 
 ## Verification
 
-- Static analysis: 0 errors and 0 warnings; existing info-level lints remain.
+- Replacement media inspection: the complete 12:48 source was sampled at
+  60-second intervals, candidate ride windows were sampled at 10-second
+  intervals, and the fall window was sampled at 2-second intervals before the
+  09:50–12:00 segment was selected. Final encoded frames at 0, 30, 60, 90,
+  120, and 126 seconds confirmed upright orientation, 16:9 crop, continuous
+  rider visibility, and the terminal fall/loss event.
+- Static analysis: 0 errors and 0 warnings; 53 existing info-level lints remain.
 - Flutter tests: 82 passed, 2 intentionally skipped by existing mode/platform
   gates. New coverage verifies Demo/Core source selection, deterministic Track
   reducer boundaries, state publication, the persistent recorded-feed label,
   and disabled vessel controls.
-- Android: `flutter build apk --debug` succeeded and produced
-  `build/app/outputs/flutter-apk/app-debug.apk` (251,101,837 bytes; SHA-256
-  `FBFAA5E443E52046C0D092E72C6A207FA501F4E817E4E0B3F1A68B2332EA22E9`).
+- Android: `flutter build apk --debug --build-number=2012 --no-pub` succeeded
+  and produced `build/app/outputs/flutter-apk/app-debug.apk` (298,234,287
+  bytes; SHA-256
+  `D65675E86042257E44D7733F7211C190469EDFCD576BB24A6337744ECBC2741B`).
 
 ## Boundaries preserved
 
@@ -76,3 +85,17 @@ the package identity and `versionName=0.1.0` remain unchanged.
 This deployment check proves installation and launch of the new branch build.
 It does not add a new S25 acceptance claim for on-screen video playback; that
 remains a direct visual/user acceptance observation.
+
+## Replacement-video device deployment — 2026-09-18
+
+The APK containing the owner-supplied 130-second rider pass was installed as
+an in-place upgrade on the same Galaxy S25 Ultra. `adb install -r` returned
+`Success`; no uninstall or app-data clear was performed. Post-install package
+inspection reported `versionCode=2012`, `versionName=0.1.0`, and
+`lastUpdateTime=2026-09-18 14:39:03` local time. A cold explicit launch
+succeeded, Android reported `MainActivity` as the focused activity, and
+`pidof` confirmed the app process was running.
+
+This supersedes the version-2011 APK for device review. It proves packaging,
+installation, and launch of the replacement asset; direct on-screen playback
+acceptance remains a user observation and is not claimed here.

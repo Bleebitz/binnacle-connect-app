@@ -92,14 +92,15 @@ class ClipRepository extends ChangeNotifier {
   /// [addFromCapture] for the demo-only bridge that makes the button presses
   /// visible here in the meantime.
   void seedDemo() {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
+    if (!AppConfig.isDemo)
+      throw StateError('Demo media is unavailable in Core mode');
     if (_clips.isNotEmpty) return;
     final now = DateTime.now();
     _clips.addAll([
       Clip(
         id: 'seed-${_seq++}',
-        title: 'Backside 180 into flats',
-        duration: const Duration(seconds: 14),
+        title: 'Wakesurf session — full pass',
+        duration: const Duration(seconds: 130),
         kind: ClipKind.highlight,
         riderId: 'levi',
         favorite: true,
@@ -151,11 +152,14 @@ class ClipRepository extends ChangeNotifier {
   /// to something visible here — see [seedDemo] docs above for why this
   /// exists instead of a real Core-backed clip feed.
   void addFromCapture({required ClipKind kind, required String preset}) {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
+    if (!AppConfig.isDemo)
+      throw StateError('Demo media is unavailable in Core mode');
     add(Clip(
       id: 'live-${_seq++}',
-      title: kind == ClipKind.photo ? 'Snapshot — $preset' : 'Highlight — $preset',
-      duration: kind == ClipKind.photo ? Duration.zero : const Duration(seconds: 12),
+      title:
+          kind == ClipKind.photo ? 'Snapshot — $preset' : 'Highlight — $preset',
+      duration:
+          kind == ClipKind.photo ? Duration.zero : const Duration(seconds: 12),
       kind: kind,
       riderId: 'levi',
       capturedAt: DateTime.now(),
@@ -170,7 +174,8 @@ class ClipRepository extends ChangeNotifier {
   /// checkbox. Returns the created clip so the caller can submit it
   /// immediately.
   Clip importFallClip() {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
+    if (!AppConfig.isDemo)
+      throw StateError('Demo media is unavailable in Core mode');
     final clip = Clip(
       id: 'import-${_seq++}',
       title: 'Imported fall clip',
@@ -193,7 +198,8 @@ const _cardPalettes = [
   [Color(0xFF2A3A2C), Color(0xFF14201A)],
 ];
 
-List<Color> _paletteFor(String id) => _cardPalettes[id.hashCode.abs() % _cardPalettes.length];
+List<Color> _paletteFor(String id) =>
+    _cardPalettes[id.hashCode.abs() % _cardPalettes.length];
 
 class LibraryScreen extends StatefulWidget {
   final ClipRepository repository;
@@ -203,7 +209,8 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
-class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProviderStateMixin {
+class _LibraryScreenState extends State<LibraryScreen>
+    with SingleTickerProviderStateMixin {
   ClipKind? _filter;
   late final AnimationController _sheen = AnimationController(
     vsync: this,
@@ -236,9 +243,11 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
       animation: widget.repository,
       builder: (context, _) {
         final all = widget.repository.clips;
-        final clips = all.where((c) => _filter == null || c.kind == _filter).toList();
+        final clips =
+            all.where((c) => _filter == null || c.kind == _filter).toList();
         final hero = _filter == null && all.isNotEmpty ? all.first : null;
-        final rest = hero == null ? clips : clips.where((c) => c.id != hero.id).toList();
+        final rest =
+            hero == null ? clips : clips.where((c) => c.id != hero.id).toList();
 
         return Scaffold(
           body: SafeArea(
@@ -250,22 +259,32 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text('Library', style: Theme.of(context).textTheme.titleLarge),
+                            Text('Library',
+                                style: Theme.of(context).textTheme.titleLarge),
                           ],
                         ),
                       ),
-                      _FilterRow(current: _filter, onChanged: (f) => setState(() => _filter = f)),
+                      _FilterRow(
+                          current: _filter,
+                          onChanged: (f) => setState(() => _filter = f)),
                       Expanded(
                         child: !AppConfig.isDemo && widget.repository.loading
                             ? const Center(child: CircularProgressIndicator())
-                            : !AppConfig.isDemo && widget.repository.loadError != null
+                            : !AppConfig.isDemo &&
+                                    widget.repository.loadError != null
                                 ? _CatalogErrorState(
                                     message: widget.repository.loadError!,
-                                    onRetry: () => widget.repository.retryLoadFromCore(
+                                    onRetry: () =>
+                                        widget.repository.retryLoadFromCore(
                                       HttpMediaCatalogService(),
-                                      context.read<PairingService>().credential!.deviceId,
-                                      bearerToken:
-                                          context.read<PairingService>().credential!.bearerToken!,
+                                      context
+                                          .read<PairingService>()
+                                          .credential!
+                                          .deviceId,
+                                      bearerToken: context
+                                          .read<PairingService>()
+                                          .credential!
+                                          .bearerToken!,
                                     ),
                                   )
                                 : const _EmptyState(),
@@ -277,11 +296,14 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
                         sliver: SliverToBoxAdapter(
-                          child: Text('Library', style: Theme.of(context).textTheme.titleLarge),
+                          child: Text('Library',
+                              style: Theme.of(context).textTheme.titleLarge),
                         ),
                       ),
                       SliverToBoxAdapter(
-                        child: _FilterRow(current: _filter, onChanged: (f) => setState(() => _filter = f)),
+                        child: _FilterRow(
+                            current: _filter,
+                            onChanged: (f) => setState(() => _filter = f)),
                       ),
                       if (hero != null)
                         SliverPadding(
@@ -293,7 +315,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                                 clip: hero,
                                 sheenT: _sheen.value,
                                 onTap: () => _openClip(context, hero),
-                                onFavorite: () => widget.repository.toggleFavorite(hero.id),
+                                onFavorite: () =>
+                                    widget.repository.toggleFavorite(hero.id),
                               ),
                             ),
                           ),
@@ -301,7 +324,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(18, 6, 18, 24),
                         sliver: SliverGrid(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 2,
                             mainAxisSpacing: 10,
                             crossAxisSpacing: 10,
@@ -315,7 +339,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                                 sheenT: _sheen.value,
                                 phase: i * 0.37,
                                 onTap: () => _openClip(context, rest[i]),
-                                onFavorite: () => widget.repository.toggleFavorite(rest[i].id),
+                                onFavorite: () => widget.repository
+                                    .toggleFavorite(rest[i].id),
                               ),
                             ),
                             childCount: rest.length,
@@ -333,7 +358,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
   void _openClip(BuildContext context, Clip clip) {
     showGlassBottomSheet(
       context: context,
-      builder: (_) => _ClipDetailSheet(clip: clip, repository: widget.repository),
+      builder: (_) =>
+          _ClipDetailSheet(clip: clip, repository: widget.repository),
     );
   }
 }
@@ -355,13 +381,15 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   VideoPlayerController? _player;
   String? _playerError;
 
-  bool get _hasRealMedia => widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
+  bool get _hasRealMedia =>
+      widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
 
   /// Download/share only make sense for a real Core-hosted link — a bundled
   /// demo asset (a local `assets/...` path, see seedDemo()) is genuinely
   /// playable but isn't a URL `url_launcher`/`share_plus` can do anything
   /// useful with.
-  bool get _isRemoteMedia => _hasRealMedia && !widget.clip.mediaUrl!.startsWith('assets/');
+  bool get _isRemoteMedia =>
+      _hasRealMedia && !widget.clip.mediaUrl!.startsWith('assets/');
 
   @override
   void dispose() {
@@ -384,7 +412,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
       await controller.play();
       if (mounted) setState(() {});
     } catch (e) {
-      if (mounted) setState(() => _playerError = 'Could not play this clip: $e');
+      if (mounted)
+        setState(() => _playerError = 'Could not play this clip: $e');
     }
   }
 
@@ -414,12 +443,15 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
           if (_playerError != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(_playerError!, style: const TextStyle(color: BinnacleColors.amber, fontSize: 12)),
+              child: Text(_playerError!,
+                  style: const TextStyle(
+                      color: BinnacleColors.amber, fontSize: 12)),
             ),
           const SizedBox(height: 10),
           Text(clip.title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),
-          Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}', style: BinnacleTheme.mono(size: 11)),
+          Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}',
+              style: BinnacleTheme.mono(size: 11)),
           const SizedBox(height: 10),
           if (clip.signed && clip.gpsAttached)
             Container(
@@ -427,12 +459,16 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
               decoration: BoxDecoration(
                 color: BinnacleColors.tealBright.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: BinnacleColors.tealBright.withValues(alpha: 0.3)),
+                border: Border.all(
+                    color: BinnacleColors.tealBright.withValues(alpha: 0.3)),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.verified_outlined, size: 14, color: BinnacleColors.tealBright),
+                const Icon(Icons.verified_outlined,
+                    size: 14, color: BinnacleColors.tealBright),
                 const SizedBox(width: 6),
-                Text('Signed on Vision · GPS attached', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright)),
+                Text('Signed on Vision · GPS attached',
+                    style: BinnacleTheme.mono(
+                        size: 10, color: BinnacleColors.tealBright)),
               ]),
             ),
           if (!_hasRealMedia)
@@ -442,7 +478,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
                 AppConfig.isDemo
                     ? 'Demo clip — no real media to download or share.'
                     : 'No media available for this clip yet.',
-                style: const TextStyle(color: BinnacleColors.slate, fontSize: 12),
+                style:
+                    const TextStyle(color: BinnacleColors.slate, fontSize: 12),
               ),
             )
           else if (!_isRemoteMedia)
@@ -458,7 +495,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: () => widget.repository.toggleFavorite(clip.id),
-                icon: Icon(clip.favorite ? Icons.favorite : Icons.favorite_border),
+                icon: Icon(
+                    clip.favorite ? Icons.favorite : Icons.favorite_border),
                 label: Text(clip.favorite ? 'Favorited' : 'Favorite'),
               ),
             ),
@@ -467,7 +505,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
               tooltip: 'Download',
               onPressed: !_isRemoteMedia
                   ? null
-                  : () => launchUrl(Uri.parse(clip.mediaUrl!), mode: LaunchMode.externalApplication),
+                  : () => launchUrl(Uri.parse(clip.mediaUrl!),
+                      mode: LaunchMode.externalApplication),
               icon: const Icon(Icons.download_outlined),
             ),
             IconButton(
@@ -501,9 +540,14 @@ class _FilterRow extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
             decoration: BoxDecoration(
-              color: on ? BinnacleColors.teal.withValues(alpha: 0.1) : BinnacleColors.navy,
+              color: on
+                  ? BinnacleColors.teal.withValues(alpha: 0.1)
+                  : BinnacleColors.navy,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: on ? BinnacleColors.teal : BinnacleColors.offWhite.withValues(alpha: 0.09)),
+              border: Border.all(
+                  color: on
+                      ? BinnacleColors.teal
+                      : BinnacleColors.offWhite.withValues(alpha: 0.09)),
             ),
             child: Text(
               label,
@@ -578,8 +622,14 @@ class _KindBadge extends StatelessWidget {
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.92), borderRadius: BorderRadius.circular(6)),
-      child: Text(label, style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.navyDeep, weight: FontWeight.w700)),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(6)),
+      child: Text(label,
+          style: BinnacleTheme.mono(
+              size: 8.5,
+              color: BinnacleColors.navyDeep,
+              weight: FontWeight.w700)),
     );
   }
 }
@@ -592,7 +642,11 @@ class _HeroClipCard extends StatelessWidget {
   final double sheenT;
   final VoidCallback onTap;
   final VoidCallback onFavorite;
-  const _HeroClipCard({required this.clip, required this.sheenT, required this.onTap, required this.onFavorite});
+  const _HeroClipCard(
+      {required this.clip,
+      required this.sheenT,
+      required this.onTap,
+      required this.onFavorite});
 
   @override
   Widget build(BuildContext context) {
@@ -608,12 +662,16 @@ class _HeroClipCard extends StatelessWidget {
             children: [
               DecoratedBox(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: palette),
+                  gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: palette),
                 ),
               ),
               _Sheen(t: sheenT),
               const Center(
-                child: Icon(Icons.play_circle_fill, color: Colors.white70, size: 46),
+                child: Icon(Icons.play_circle_fill,
+                    color: Colors.white70, size: 46),
               ),
               Positioned(
                 top: 10,
@@ -622,19 +680,25 @@ class _HeroClipCard extends StatelessWidget {
                   _KindBadge(kind: clip.kind),
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
                       color: BinnacleColors.navyDeep.withValues(alpha: 0.6),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text('LATEST', style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.tealBright, weight: FontWeight.w700)),
+                    child: Text('LATEST',
+                        style: BinnacleTheme.mono(
+                            size: 8.5,
+                            color: BinnacleColors.tealBright,
+                            weight: FontWeight.w700)),
                   ),
                 ]),
               ),
               Positioned(
                 top: 8,
                 right: 8,
-                child: _FavoriteButton(favorite: clip.favorite, onTap: onFavorite),
+                child:
+                    _FavoriteButton(favorite: clip.favorite, onTap: onFavorite),
               ),
               Positioned(
                 left: 0,
@@ -646,7 +710,10 @@ class _HeroClipCard extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, BinnacleColors.navyDeep.withValues(alpha: 0.88)],
+                      colors: [
+                        Colors.transparent,
+                        BinnacleColors.navyDeep.withValues(alpha: 0.88)
+                      ],
                     ),
                   ),
                   child: Column(
@@ -656,11 +723,18 @@ class _HeroClipCard extends StatelessWidget {
                       Text(clip.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
+                          style: const TextStyle(
+                              fontFamily: 'Space Grotesk',
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              color: Colors.white)),
                       const SizedBox(height: 3),
                       Text(
-                        clip.duration == Duration.zero ? _timeAgo(clip.capturedAt) : '${clip.duration.inSeconds}s · ${_timeAgo(clip.capturedAt)}',
-                        style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.slate),
+                        clip.duration == Duration.zero
+                            ? _timeAgo(clip.capturedAt)
+                            : '${clip.duration.inSeconds}s · ${_timeAgo(clip.capturedAt)}',
+                        style: BinnacleTheme.mono(
+                            size: 10.5, color: BinnacleColors.slate),
                       ),
                     ],
                   ),
@@ -700,14 +774,23 @@ class _ClipCard extends StatelessWidget {
           children: [
             DecoratedBox(
               decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: palette),
+                gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: palette),
               ),
             ),
             _Sheen(t: sheenT, phase: phase),
             if (clip.kind != ClipKind.photo)
-              const Center(child: Icon(Icons.play_arrow_rounded, color: Colors.white54, size: 30)),
+              const Center(
+                  child: Icon(Icons.play_arrow_rounded,
+                      color: Colors.white54, size: 30)),
             Positioned(top: 6, left: 6, child: _KindBadge(kind: clip.kind)),
-            Positioned(top: 4, right: 4, child: _FavoriteButton(favorite: clip.favorite, onTap: onFavorite, small: true)),
+            Positioned(
+                top: 4,
+                right: 4,
+                child: _FavoriteButton(
+                    favorite: clip.favorite, onTap: onFavorite, small: true)),
             Positioned(
               left: 0,
               right: 0,
@@ -718,7 +801,10 @@ class _ClipCard extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, BinnacleColors.navyDeep.withValues(alpha: 0.9)],
+                    colors: [
+                      Colors.transparent,
+                      BinnacleColors.navyDeep.withValues(alpha: 0.9)
+                    ],
                   ),
                 ),
                 child: Column(
@@ -728,11 +814,17 @@ class _ClipCard extends StatelessWidget {
                     Text(clip.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11.5, color: Colors.white)),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11.5,
+                            color: Colors.white)),
                     const SizedBox(height: 2),
                     Text(
-                      clip.duration == Duration.zero ? _timeAgo(clip.capturedAt) : '${clip.duration.inSeconds}s',
-                      style: BinnacleTheme.mono(size: 9, color: BinnacleColors.slate),
+                      clip.duration == Duration.zero
+                          ? _timeAgo(clip.capturedAt)
+                          : '${clip.duration.inSeconds}s',
+                      style: BinnacleTheme.mono(
+                          size: 9, color: BinnacleColors.slate),
                     ),
                   ],
                 ),
@@ -749,7 +841,8 @@ class _FavoriteButton extends StatelessWidget {
   final bool favorite;
   final VoidCallback onTap;
   final bool small;
-  const _FavoriteButton({required this.favorite, required this.onTap, this.small = false});
+  const _FavoriteButton(
+      {required this.favorite, required this.onTap, this.small = false});
 
   @override
   Widget build(BuildContext context) {
@@ -766,7 +859,8 @@ class _FavoriteButton extends StatelessWidget {
         ),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+          transitionBuilder: (child, anim) =>
+              ScaleTransition(scale: anim, child: child),
           child: Icon(
             favorite ? Icons.favorite : Icons.favorite_border,
             key: ValueKey(favorite),
@@ -793,7 +887,8 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) => const BinnacleEmptyState(
         icon: Icons.video_camera_back_outlined,
         title: 'No clips yet',
-        subtitle: 'Hit the water and press Save Highlight —\nyour best pass shows up here first.',
+        subtitle:
+            'Hit the water and press Save Highlight —\nyour best pass shows up here first.',
         accent: BinnacleColors.tealBright,
       );
 }
@@ -813,12 +908,18 @@ class _CatalogErrorState extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_off, color: BinnacleColors.amber, size: 40),
+              const Icon(Icons.cloud_off,
+                  color: BinnacleColors.amber, size: 40),
               const SizedBox(height: 12),
               const Text("Couldn't load clips from Core",
-                  style: TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 16)),
+                  style: TextStyle(
+                      fontFamily: 'Space Grotesk',
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16)),
               const SizedBox(height: 6),
-              Text(message, textAlign: TextAlign.center, style: const TextStyle(color: BinnacleColors.slate)),
+              Text(message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: BinnacleColors.slate)),
               const SizedBox(height: 16),
               OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
             ],

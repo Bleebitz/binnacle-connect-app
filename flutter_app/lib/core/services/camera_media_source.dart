@@ -59,12 +59,14 @@ class DemoVisionTrackReducer {
 
   VisionTrackState reduce(Duration position) {
     final seconds = position.inMilliseconds / 1000;
-    // The controlled demo clip is 12 seconds long, so every phase must be
-    // reachable before video_player loops back to zero.
-    if (seconds < 2) return VisionTrackState.acquiring;
-    if (seconds < 7) return VisionTrackState.riderLocked;
-    if (seconds < 9) return VisionTrackState.occluded;
-    return VisionTrackState.tracking;
+    // The controlled 130-second stern-camera pass keeps the rider visible
+    // until the real fall near the end. The final loss/coast window then
+    // returns to acquisition before video_player loops back to zero.
+    if (seconds < 3) return VisionTrackState.acquiring;
+    if (seconds < 15) return VisionTrackState.riderLocked;
+    if (seconds < 121) return VisionTrackState.tracking;
+    if (seconds < 129) return VisionTrackState.occluded;
+    return VisionTrackState.acquiring;
   }
 }
 
