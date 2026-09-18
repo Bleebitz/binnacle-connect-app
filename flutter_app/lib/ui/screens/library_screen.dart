@@ -209,6 +209,16 @@ class ClipRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set when Community's Post a highlight flow publishes this clip —
+  /// see post_highlight_sheet.dart and crew_screen.dart's postHighlight.
+  void setCaption(String clipId, String caption) {
+    final i = _clips.indexWhere((c) => c.id == clipId);
+    if (i == -1) return;
+    _clips[i] = _clips[i].copyWith(caption: caption);
+    if (_clips[i].localPath != null) unawaited(_persistImported());
+    notifyListeners();
+  }
+
   int _seq = 0;
 
   /// Demo-only seed data so the Library has something to show without
@@ -355,6 +365,11 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
           // brief real copy step shows its own spinner in a dialog (see
           // media_import_sheet.dart's _showImporting).
           floatingActionButton: FloatingActionButton.extended(
+            // Explicit unique tag: every bottom-nav tab's screen stays
+            // mounted simultaneously (see main.dart's _RootShell), so two
+            // FABs with the default shared hero tag collide even though
+            // only one is ever visible at a time.
+            heroTag: 'library-add-media-fab',
             onPressed: widget.repository.importing ? null : () => _openAddMedia(context),
             icon: const Icon(Icons.add_photo_alternate_outlined),
             label: const Text('Add media'),

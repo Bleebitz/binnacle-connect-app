@@ -67,6 +67,7 @@ class _BestFallsScreenState extends State<BestFallsScreen> {
                   ],
                 ),
           floatingActionButton: FloatingActionButton.extended(
+            heroTag: 'best-falls-submit-fab',
             onPressed: () => _openEntrySheet(context),
             icon: const Icon(Icons.add),
             label: const Text('Submit a fall'),

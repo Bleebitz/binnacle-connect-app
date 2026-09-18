@@ -21,6 +21,38 @@ class CrewRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Real "publish" destination for Community's Post a highlight flow —
+  /// there is no external identity/social backend (BIN-46/BIN-40 are both
+  /// Todo), so "publish to Crew" is the only genuine audience today: it
+  /// attaches [clipId] to the most recent session (creating one first if
+  /// none exists yet), visible to this Crew immediately, with no network
+  /// call and no fabricated "posted publicly" state.
+  void postHighlight(String clipId) {
+    if (_sessions.isEmpty) {
+      _sessions.insert(
+        0,
+        CrewSession(
+          id: 'session-${DateTime.now().microsecondsSinceEpoch}',
+          label: 'Today',
+          location: '',
+          riderIds: const [],
+          clipIds: [clipId],
+        ),
+      );
+    } else if (!_sessions.first.clipIds.contains(clipId)) {
+      final s = _sessions.first;
+      _sessions[0] = CrewSession(
+        id: s.id,
+        label: s.label,
+        location: s.location,
+        riderIds: s.riderIds,
+        clipIds: [...s.clipIds, clipId],
+        reactions: s.reactions,
+      );
+    }
+    notifyListeners();
+  }
+
   void react(String sessionId, String emoji) {
     final i = _sessions.indexWhere((s) => s.id == sessionId);
     if (i == -1) return;
@@ -126,10 +158,24 @@ class _SessionsTab extends StatelessWidget {
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: BinnacleColors.offWhite)),
-                const SizedBox(height: 2),
-                Text(s.location,
-                    style: BinnacleTheme.mono(
-                        size: 14, color: BinnacleColors.slateLight)),
+                if (s.location.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(s.location,
+                      style: BinnacleTheme.mono(
+                          size: 14, color: BinnacleColors.slateLight)),
+                ],
+                if (s.clipIds.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.movie_creation_outlined,
+                        size: 13, color: BinnacleColors.tealBright),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${s.clipIds.length} highlight${s.clipIds.length == 1 ? '' : 's'} posted',
+                      style: BinnacleTheme.mono(size: 11.5, color: BinnacleColors.tealBright),
+                    ),
+                  ]),
+                ],
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
