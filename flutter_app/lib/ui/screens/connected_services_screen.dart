@@ -44,6 +44,33 @@ class ConnectedServicesScreen extends StatelessWidget {
                   ),
                 ),
               ),
+            // Instagram is deliberately absent from the selectable
+            // destination list, not merely unconnected — Meta does not
+            // offer a general-purpose third-party RTMP-push API into
+            // Instagram Live (unlike Facebook Live's Graph API, which
+            // does). Instagram Live ingest is limited to Meta's own
+            // first-party broadcaster tools / the invite-only Live
+            // Producer program, which requires separate Meta approval
+            // per account and is not a workflow this app can request or
+            // grant on a user's behalf. Shown here, disabled, so this is
+            // an explained limitation rather than a silent omission.
+            Material(
+              type: MaterialType.transparency,
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                title: const Text('Instagram'),
+                subtitle: const Text(
+                  'Not supported — Instagram Live has no general '
+                  'third-party RTMP-push API; it requires Meta\'s '
+                  'invite-only Live Producer approval per account.',
+                  style: TextStyle(fontSize: 11, height: 1.4),
+                ),
+                trailing: const OutlinedButton(
+                  onPressed: null,
+                  child: Text('Unavailable'),
+                ),
+              ),
+            ),
             const Divider(height: 32),
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               Text('Custom RTMP/RTMPS', style: Theme.of(context).textTheme.titleMedium),

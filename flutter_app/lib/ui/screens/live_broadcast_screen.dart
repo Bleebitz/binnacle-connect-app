@@ -225,6 +225,15 @@ class _SetupPanel extends StatelessWidget {
             selected: selected.contains(custom),
             onTap: () => onToggle(custom),
           ),
+        // Not a DestinationKind — permanently disabled, informational only.
+        // Meta doesn't offer a general third-party RTMP-push API into
+        // Instagram Live (see connected_services_screen.dart for the full
+        // explanation); showing it disabled here means the destination
+        // step also explains the gap instead of silently omitting it.
+        const _UnsupportedDestinationTile(
+          label: 'Instagram',
+          reason: 'Not supported — no general RTMP-push API for Instagram Live',
+        ),
         TextButton.icon(
           onPressed: onAddCustomRtmp,
           icon: const Icon(Icons.add, size: 16),
@@ -276,6 +285,29 @@ class _DestinationTile extends StatelessWidget {
         onChanged: enabled ? (_) => onTap() : null,
         title: Text(destination.label),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 11)),
+      ),
+    );
+  }
+}
+
+/// A destination that isn't selectable at all — distinct from a
+/// [_DestinationTile] with `enabled: false` (which means "connect it in
+/// Settings first"). This means "this platform is not offered," with an
+/// honest reason, not a checkbox that will work once something else is set up.
+class _UnsupportedDestinationTile extends StatelessWidget {
+  final String label;
+  final String reason;
+  const _UnsupportedDestinationTile({required this.label, required this.reason});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.block, size: 20, color: BinnacleColors.slateDim),
+        title: Text(label, style: const TextStyle(color: BinnacleColors.slateDim)),
+        subtitle: Text(reason, style: const TextStyle(fontSize: 11)),
       ),
     );
   }
