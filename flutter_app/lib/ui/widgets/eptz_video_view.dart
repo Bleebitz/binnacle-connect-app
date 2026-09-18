@@ -3,6 +3,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../core/services/camera_media_source.dart';
+import '../../core/services/demo_media.dart';
 import '../../core/services/webrtc_service.dart';
 import '../theme/binnacle_theme.dart';
 import 'simulated_wake_view.dart';
@@ -117,6 +118,12 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
       await _controller.initialize();
       await _controller.setLooping(true);
       await _controller.play();
+      // Register as the single position source (Track state, Snapshot and
+      // Save Highlight all read this same controller).
+      widget.source.attachPlayer(
+        readPosition: () => _controller.position,
+        duration: _controller.value.duration,
+      );
       if (mounted) setState(() => _ready = true);
     } catch (_) {
       if (mounted) setState(() => _failed = true);
@@ -129,6 +136,7 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
 
   @override
   void dispose() {
+    widget.source.detachPlayer();
     _controller.removeListener(_onVideoTick);
     _controller.dispose();
     super.dispose();
@@ -149,7 +157,7 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
     final size = _controller.value.size;
-    return ClipRect(
+    final video = ClipRect(
       child: FittedBox(
         fit: BoxFit.cover,
         alignment: Alignment.center,
@@ -159,6 +167,51 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
           child: VideoPlayer(_controller),
         ),
       ),
+    );
+    // Digital zoom is a local presentation change of the recorded video only;
+    // the surrounding controls and labels are siblings in the parent Stack and
+    // are never scaled.
+    return DemoPinchZoom(
+      zoom: widget.source.zoom,
+      child: ValueListenableBuilder<double>(
+        valueListenable: widget.source.zoom,
+        child: video,
+        builder: (context, zoom, child) => ClipRect(
+          child: Transform.scale(
+            scale: zoom,
+            alignment: Alignment.center,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Two-finger pinch for the recorded demo's digital zoom. It needs two
+/// pointers, so single-finger scrolling of the page is unaffected. The value
+/// is clamped by [DemoZoom].
+class DemoPinchZoom extends StatefulWidget {
+  final DemoZoom zoom;
+  final Widget child;
+  const DemoPinchZoom({super.key, required this.zoom, required this.child});
+
+  @override
+  State<DemoPinchZoom> createState() => _DemoPinchZoomState();
+}
+
+class _DemoPinchZoomState extends State<DemoPinchZoom> {
+  double _base = DemoZoom.min;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onScaleStart: (_) => _base = widget.zoom.value,
+      onScaleUpdate: (d) {
+        if (d.pointerCount >= 2) widget.zoom.setZoom(_base * d.scale);
+      },
+      child: widget.child,
     );
   }
 }

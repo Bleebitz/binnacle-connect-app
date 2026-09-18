@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -8,6 +9,7 @@ import '../../core/models/clip.dart' show ClipKind;
 import '../../core/models/vessel_state.dart';
 import '../../core/services/camera_media_source.dart';
 import '../../core/services/control_channel_service.dart';
+import '../../core/services/demo_media.dart';
 import '../../core/services/command_result.dart';
 import '../../core/services/mob_alert_state.dart';
 import '../../core/services/pairing_service.dart';
@@ -26,7 +28,12 @@ import 'library_screen.dart' show ClipRepository;
 // rec-state pill, a 16:9 viewport with HUD tags / zoom column / capture row,
 // the go-live bar, and the quick-adjust handle. See spotter-v5 prototype.
 class CaptureScreen extends StatefulWidget {
-  const CaptureScreen({super.key});
+  /// Lets a test supply the camera source (for example a recorded source with
+  /// a fake player attached). The screen takes ownership and disposes it.
+  @visibleForTesting
+  final CameraMediaSource? mediaSourceForTesting;
+
+  const CaptureScreen({super.key, this.mediaSourceForTesting});
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -38,6 +45,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   bool _flash = false;
   String? _saveToast;
   bool _saveToastIsError = false;
+  bool _demoBusy = false;
   Timer? _toastTimer;
   String _preset = 'wakesurf';
 
@@ -49,7 +57,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
           ? SimulatedVideoRenderer()
           : RtcVideoRenderer(control: context.read<ControlChannelService>()),
     );
-    _mediaSource = CameraMediaSource.forMode(demo: AppConfig.isDemo, webRtc: _webrtc);
+    _mediaSource = widget.mediaSourceForTesting ??
+        CameraMediaSource.forMode(demo: AppConfig.isDemo, webRtc: _webrtc);
   }
 
   @override
@@ -112,9 +121,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   Future<void> _capture(ControlChannelService control, ClipKind kind) async {
     if (AppConfig.isDemo) {
-      context.read<ClipRepository>().addFromCapture(kind: kind, preset: _preset);
-      if (kind == ClipKind.photo) _fireFlash();
-      _showSaveToast('Demo capture saved');
+      await _captureDemo(control, kind);
       return;
     }
     final command = kind == ClipKind.photo ? 'snapshot' : 'save_highlight';
@@ -133,6 +140,59 @@ class _CaptureScreenState extends State<CaptureScreen> {
       }
     } on CommandRejected {
       if (mounted) _showSaveToast('Capture unavailable — check pairing and Core link', isError: true);
+    }
+  }
+
+  /// Snapshot / Save Highlight in Recorded Demo Mode. LOCAL only: it reads the
+  /// recorded video's real playback position, builds real Demo media from the
+  /// bundled asset, and adds it to the Library. No Core command is sent and no
+  /// Core acknowledgement is claimed; the resulting clips are tagged Demo.
+  Future<void> _captureDemo(ControlChannelService control, ClipKind kind) async {
+    if (_demoBusy) return;
+    final source = _mediaSource;
+    if (source is! DemoRecordedCameraSource) {
+      _showSaveToast('Capture unavailable — no recorded feed', isError: true);
+      return;
+    }
+    final isPhoto = kind == ClipKind.photo;
+    final label = isPhoto ? 'Snapshot' : 'Highlight';
+    final media = context.read<DemoMediaCapture>();
+    final library = context.read<ClipRepository>();
+    final capture = control.state.capture;
+    setState(() => _demoBusy = true);
+    if (isPhoto) _fireFlash();
+    try {
+      final position = await source.readPlaybackPosition();
+      if (isPhoto) {
+        final result = await media.snapshot(assetPath: source.assetPath, position: position);
+        await library.addDemoLocalClip(result.clip);
+        if (mounted) {
+          _showSaveToast(result.galleryUri == null
+              ? 'Snapshot saved to Library'
+              : 'Snapshot saved to Library and Photos');
+        }
+      } else {
+        final duration = source.sourceDuration;
+        if (duration == null) {
+          throw StateError('The recorded feed length is not known yet');
+        }
+        final clip = await media.highlight(
+          assetPath: source.assetPath,
+          position: position,
+          sourceDuration: duration,
+          preRoll: Duration(seconds: capture.preRollSeconds),
+          postRoll: Duration(seconds: capture.postRollSeconds),
+        );
+        await library.addDemoLocalClip(clip);
+        if (mounted) _showSaveToast('Highlight saved to Library');
+      }
+    } catch (e) {
+      // StateError.toString() adds a "Bad state:" prefix that means nothing to
+      // a rider; show the actual reason.
+      final reason = e is StateError ? e.message : e.toString();
+      if (mounted) _showSaveToast('$label failed: $reason', isError: true);
+    } finally {
+      if (mounted) setState(() => _demoBusy = false);
     }
   }
 
@@ -249,12 +309,25 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       top: 0,
                       bottom: 0,
                       child: Center(
-                        child: _ZoomColumn(
-                          zoom: state.framing.zoom,
-                          maxZoom: state.framing.maxZoom,
-                          onZoomIn: AppConfig.isDemo ? null : () => _send(() => control.nudgeZoom(0.5, actor: 'levi')),
-                          onZoomOut: AppConfig.isDemo ? null : () => _send(() => control.nudgeZoom(-0.5, actor: 'levi')),
-                        ),
+                        child: _mediaSource is DemoRecordedCameraSource
+                            // Recorded Demo: local digital zoom of the video,
+                            // never a Core command.
+                            ? ValueListenableBuilder<double>(
+                                valueListenable: (_mediaSource as DemoRecordedCameraSource).zoom,
+                                builder: (_, zoom, __) => _ZoomColumn(
+                                  zoom: zoom,
+                                  maxZoom: DemoZoom.max,
+                                  onZoomIn: (_mediaSource as DemoRecordedCameraSource).zoom.zoomIn,
+                                  onZoomOut: (_mediaSource as DemoRecordedCameraSource).zoom.zoomOut,
+                                ),
+                              )
+                            // Core Mode: Core-authoritative zoom, unchanged.
+                            : _ZoomColumn(
+                                zoom: state.framing.zoom,
+                                maxZoom: state.framing.maxZoom,
+                                onZoomIn: () => _send(() => control.nudgeZoom(0.5, actor: 'levi')),
+                                onZoomOut: () => _send(() => control.nudgeZoom(-0.5, actor: 'levi')),
+                              ),
                       ),
                     ),
                     Positioned(
@@ -263,8 +336,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       bottom: 9,
                       child: _CaptureRow(
                         manual: state.framing.isManual,
-                        onSnapshot: AppConfig.isDemo ? null : () => _capture(control, ClipKind.photo),
-                        onHighlight: AppConfig.isDemo ? null : () => _capture(control, ClipKind.highlight),
+                        // Snapshot and Highlight are enabled in both modes: in
+                        // Demo they are local media actions (see _captureDemo),
+                        // in Core Mode they are confirmed Core commands.
+                        onSnapshot: () => _capture(control, ClipKind.photo),
+                        onHighlight: () => _capture(control, ClipKind.highlight),
                         onOrient: AppConfig.isDemo ? null : () => _send(() => control.setControlMode(
                               state.framing.isManual ? 'ai' : 'manual',
                               actor: 'levi',
@@ -1102,7 +1178,7 @@ class _DemoControlNotice extends StatelessWidget {
         const SizedBox(width: 9),
         Expanded(
           child: Text(
-            'Demo playback only — camera, framing, capture, and vessel controls are disabled.',
+            'Recorded demo feed — Snapshot, Highlight, and digital Zoom are simulated locally. Vessel controls remain disabled.',
             style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.amber),
           ),
         ),

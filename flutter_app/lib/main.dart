@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import 'core/app_config.dart';
 import 'core/services/control_channel_service.dart';
+import 'core/services/demo_media.dart';
 import 'core/services/mob_alert_state.dart';
 import 'core/services/telemetry_socket.dart';
 import 'core/services/pairing_service.dart';
@@ -30,7 +32,12 @@ void main() {
     runApp(const _ConfigErrorApp());
     return;
   }
-  runApp(const BinnacleConnectApp());
+  runApp(BinnacleConnectApp(
+    // Real Android frame extraction and on-device persistence for locally
+    // created Demo media. Tests inject fakes instead.
+    demoMedia: DemoMediaCapture(extractor: PlatformFrameExtractor()),
+    demoLibraryStore: SharedPrefsDemoLibraryStore(),
+  ));
 }
 
 class _ConfigErrorApp extends StatelessWidget {
@@ -73,7 +80,15 @@ class _ConfigErrorApp extends StatelessWidget {
 }
 
 class BinnacleConnectApp extends StatelessWidget {
-  const BinnacleConnectApp({super.key});
+  /// Local Demo media actions (Snapshot / Save Highlight). Only used in Demo
+  /// Mode; Core Mode's capture is a confirmed Core command.
+  final DemoMediaCapture? demoMedia;
+
+  /// Where locally created Demo media is persisted. Null means nothing is
+  /// persisted (widget tests, and always in Core Mode).
+  final DemoLibraryStore? demoLibraryStore;
+
+  const BinnacleConnectApp({super.key, this.demoMedia, this.demoLibraryStore});
 
   @override
   Widget build(BuildContext context) {
@@ -112,6 +127,11 @@ class BinnacleConnectApp extends StatelessWidget {
         ),
 
         ChangeNotifierProvider(create: (_) => MobAlertState()),
+        Provider<DemoMediaCapture>(
+          create: (_) =>
+              demoMedia ??
+              DemoMediaCapture(extractor: PlatformFrameExtractor()),
+        ),
         // Only fabricate telemetry in demo mode. A core-mode build with no
         // real telemetry connection yet should show honest zero/default
         // values, not simulated numbers that look like a live boat.
@@ -127,8 +147,12 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProxyProvider2<PairingService, ControlChannelService,
             ClipRepository>(
           create: (_) {
-            final clips = ClipRepository();
-            if (AppConfig.isDemo) clips.seedDemo();
+            final clips = ClipRepository(demoStore: demoLibraryStore);
+            if (AppConfig.isDemo) {
+              clips.seedDemo();
+              // Restore Snapshots/Highlights saved by earlier Demo sessions.
+              unawaited(clips.hydrateDemo());
+            }
             return clips;
           },
           update: (context, pairing, control, clips) {

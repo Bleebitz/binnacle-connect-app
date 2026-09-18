@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'demo_media.dart';
 import 'webrtc_service.dart';
 
 enum CameraMediaKind { demoRecordedAsset, liveWebRtc }
@@ -89,13 +90,38 @@ abstract class CameraMediaSource {
           : LiveWebRtcCameraSource(webRtc: webRtc);
 }
 
-class DemoRecordedCameraSource implements CameraMediaSource {
+/// Local media actions that only the recorded demo source can perform. The
+/// live WebRTC source deliberately does not implement this: Core Mode's zoom,
+/// snapshot and highlight are Core commands, so nothing local can be invoked
+/// on it by mistake.
+abstract interface class DemoMediaControls {
+  DemoZoom get zoom;
+  String get assetPath;
+
+  /// Total length of the recorded source, once the player has loaded it.
+  Duration? get sourceDuration;
+
+  /// The recorded video's real playback position, read fresh from the player.
+  /// Throws [StateError] when the player is not ready.
+  Future<Duration> readPlaybackPosition();
+}
+
+class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   static const defaultAssetPath = 'assets/demo/gopro_dev_footage.mp4';
 
+  @override
   final String assetPath;
   final DemoVisionTrackReducer reducer;
   final ValueNotifier<VisionTrackState> _trackState =
       ValueNotifier(VisionTrackState.acquiring);
+
+  /// Digital zoom for the recorded feed (presentation only, never a command).
+  @override
+  final DemoZoom zoom = DemoZoom();
+
+  Duration _lastPosition = Duration.zero;
+  Duration? _sourceDuration;
+  Future<Duration?> Function()? _positionReader;
 
   DemoRecordedCameraSource({
     this.assetPath = defaultAssetPath,
@@ -111,13 +137,48 @@ class DemoRecordedCameraSource implements CameraMediaSource {
   @override
   ValueListenable<VisionTrackState> get trackState => _trackState;
 
+  @override
+  Duration? get sourceDuration => _sourceDuration;
+
+  /// The video player registers itself here. Its position is the single clock
+  /// for Track state, Snapshot and Save Highlight; there is no second timer.
+  void attachPlayer({
+    required Future<Duration?> Function() readPosition,
+    required Duration? duration,
+  }) {
+    _positionReader = readPosition;
+    _sourceDuration = duration;
+  }
+
+  void detachPlayer() {
+    _positionReader = null;
+  }
+
   void updatePlaybackPosition(Duration position) {
+    _lastPosition = position;
     final next = reducer.reduce(position);
     if (_trackState.value.phase != next.phase) _trackState.value = next;
   }
 
   @override
-  void dispose() => _trackState.dispose();
+  Future<Duration> readPlaybackPosition() async {
+    final reader = _positionReader;
+    if (reader == null) {
+      throw StateError('The recorded feed is not ready yet');
+    }
+    final fresh = await reader();
+    if (fresh != null) {
+      updatePlaybackPosition(fresh);
+      return fresh;
+    }
+    return _lastPosition;
+  }
+
+  @override
+  void dispose() {
+    _trackState.dispose();
+    zoom.dispose();
+  }
 }
 
 class LiveWebRtcCameraSource implements CameraMediaSource {

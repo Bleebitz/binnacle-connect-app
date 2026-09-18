@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -5,6 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../core/app_config.dart';
 import '../../core/models/clip.dart';
+import '../../core/services/camera_media_source.dart'
+    show DemoRecordedCameraSource;
+import '../../core/services/demo_media.dart';
 import '../../core/services/media_catalog_service.dart';
 import '../../core/services/pairing_service.dart';
 import '../theme/binnacle_theme.dart';
@@ -17,6 +22,13 @@ import '../widgets/glass_sheet.dart';
 /// media_catalog_service.dart for the (unverified, no live Core exists yet)
 /// endpoint contract.
 class ClipRepository extends ChangeNotifier {
+  /// Persists Demo-origin clips across restarts. Null (the default, and always
+  /// in Core Mode) means nothing is persisted here: Core clips come from the
+  /// Core, never from local storage.
+  final DemoLibraryStore? _demoStore;
+
+  ClipRepository({DemoLibraryStore? demoStore}) : _demoStore = demoStore;
+
   final List<Clip> _clips = [];
   List<Clip> get clips => List.unmodifiable(_clips);
 
@@ -73,6 +85,53 @@ class ClipRepository extends ChangeNotifier {
     if (i == -1) return;
     _clips[i] = _clips[i].copyWith(favorite: !_clips[i].favorite);
     notifyListeners();
+    if (_clips[i].isDemoOrigin) _persistDemo();
+  }
+
+  /// Demo-origin clips worth persisting: those the user created locally. The
+  /// seeded showcase clips are regenerated each launch, never stored.
+  List<Clip> get _persistableDemoClips =>
+      _clips.where((c) => c.isDemoOrigin && !c.id.startsWith('seed-')).toList();
+
+  Future<void> _persistDemo() async {
+    final store = _demoStore;
+    if (store == null) return;
+    try {
+      await store.save(_persistableDemoClips);
+    } catch (e) {
+      debugPrint('Demo Library save failed: $e');
+    }
+  }
+
+  /// Restores locally created Demo media. A snapshot whose image file has
+  /// disappeared is dropped rather than shown as a broken card.
+  Future<void> hydrateDemo() async {
+    final store = _demoStore;
+    if (store == null) return;
+    if (!AppConfig.isDemo) return;
+    final saved = await store.load();
+    final restored = <Clip>[
+      for (final c in saved)
+        if (c.origin != ClipOrigin.demoLocalCapture ||
+            (c.localPath != null && File(c.localPath!).existsSync()))
+          c,
+    ]..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+    final known = _clips.map((c) => c.id).toSet();
+    _clips.insertAll(0, restored.where((c) => !known.contains(c.id)));
+    notifyListeners();
+  }
+
+  /// Adds Demo media created locally by a Demo action, and persists it. Only
+  /// valid in Demo Mode; Core media never enters the Library this way.
+  Future<void> addDemoLocalClip(Clip clip) async {
+    if (!AppConfig.isDemo) {
+      throw StateError('Demo media is unavailable in Core mode');
+    }
+    if (!clip.isDemoOrigin) {
+      throw ArgumentError('Only Demo-origin clips can be added here');
+    }
+    add(clip);
+    await _persistDemo();
   }
 
   void assignRider(String clipId, String riderId) {
@@ -110,7 +169,12 @@ class ClipRepository extends ChangeNotifier {
         // demo data: this is not Core-backed media (see Clip.mediaUrl's
         // doc comment) and mediaUrl for a real clip only ever comes from
         // HttpMediaCatalogService's real Core fetch.
-        mediaUrl: 'assets/demo/gopro_dev_footage.mp4',
+        origin: ClipOrigin.demoSegment,
+        segment: MediaSegment(
+          assetPath: DemoRecordedCameraSource.defaultAssetPath,
+          start: Duration.zero,
+          end: Duration(seconds: 130),
+        ),
       ),
       Clip(
         id: 'seed-${_seq++}',
@@ -380,35 +444,72 @@ class _ClipDetailSheet extends StatefulWidget {
 class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   VideoPlayerController? _player;
   String? _playerError;
+  bool _segmentFinished = false;
+
+  MediaSegment? get _segment => widget.clip.segment;
 
   bool get _hasRealMedia =>
-      widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
+      (widget.clip.mediaUrl != null || _segment != null) &&
+      widget.clip.kind != ClipKind.photo;
 
-  /// Download/share only make sense for a real Core-hosted link — a bundled
-  /// demo asset (a local `assets/...` path, see seedDemo()) is genuinely
-  /// playable but isn't a URL `url_launcher`/`share_plus` can do anything
-  /// useful with.
-  bool get _isRemoteMedia =>
-      _hasRealMedia && !widget.clip.mediaUrl!.startsWith('assets/');
+  /// Download/share only make sense for a real Core-hosted link. A demo
+  /// segment or local image is genuinely playable/viewable but has no URL.
+  bool get _isRemoteMedia => widget.clip.mediaUrl != null;
 
   @override
   void dispose() {
+    _player?.removeListener(_enforceSegmentEnd);
     _player?.dispose();
     super.dispose();
   }
 
+  /// A demo highlight is a reference into the bundled source, so playback must
+  /// stop at the saved end point instead of running to the end of the source.
+  void _enforceSegmentEnd() {
+    final seg = _segment;
+    final player = _player;
+    if (seg == null || player == null || !player.value.isInitialized) return;
+    if (player.value.position >= seg.end && !_segmentFinished) {
+      _segmentFinished = true;
+      player.pause();
+      player.seekTo(seg.start);
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _togglePlayback() async {
+    final player = _player;
+    if (player == null || !player.value.isInitialized) return;
+    if (player.value.isPlaying) {
+      await player.pause();
+    } else {
+      final seg = _segment;
+      if (seg != null && _segmentFinished) {
+        _segmentFinished = false;
+        await player.seekTo(seg.start);
+      }
+      await player.play();
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _play() async {
+    final seg = _segment;
     final url = widget.clip.mediaUrl;
-    if (url == null) return;
-    // A bundled demo asset (see seedDemo()) is a local path, not an http(s)
-    // URL — a real Core-backed clip's mediaUrl always comes from
-    // HttpMediaCatalogService and is always http(s).
-    final controller = url.startsWith('assets/')
-        ? VideoPlayerController.asset(url)
-        : VideoPlayerController.networkUrl(Uri.parse(url));
+    if (seg == null && url == null) return;
+    // A demo segment plays the bundled asset from its saved start point; a
+    // real Core-backed clip's mediaUrl always comes from HttpMediaCatalogService
+    // and is always http(s).
+    final controller = seg != null
+        ? VideoPlayerController.asset(seg.assetPath)
+        : VideoPlayerController.networkUrl(Uri.parse(url!));
     setState(() => _player = controller);
     try {
       await controller.initialize();
+      if (seg != null) {
+        await controller.seekTo(seg.start);
+        controller.addListener(_enforceSegmentEnd);
+      }
       await controller.play();
       if (mounted) setState(() {});
     } catch (e) {
@@ -426,12 +527,25 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_player != null && _player!.value.isInitialized)
+          if (clip.localPath != null && File(clip.localPath!).existsSync())
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.file(File(clip.localPath!),
+                  fit: BoxFit.contain, gaplessPlayback: true),
+            ),
+          if (_player != null && _player!.value.isInitialized) ...[
             AspectRatio(
               aspectRatio: _player!.value.aspectRatio,
               child: VideoPlayer(_player!),
-            )
-          else if (_hasRealMedia)
+            ),
+            if (_segment != null)
+              _SegmentControls(
+                segment: _segment!,
+                position: _player!.value.position,
+                playing: _player!.value.isPlaying,
+                onToggle: _togglePlayback,
+              ),
+          ] else if (_hasRealMedia)
             SizedBox(
               height: 44,
               child: OutlinedButton.icon(
@@ -453,7 +567,9 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
           Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}',
               style: BinnacleTheme.mono(size: 11)),
           const SizedBox(height: 10),
-          if (clip.signed && clip.gpsAttached)
+          if (clip.isDemoOrigin)
+            _DemoProvenance(clip: clip)
+          else if (clip.signed && clip.gpsAttached)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
@@ -471,7 +587,15 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
                         size: 10, color: BinnacleColors.tealBright)),
               ]),
             ),
-          if (!_hasRealMedia)
+          if (clip.localPath != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Text(
+                'Real frame from the recorded demo feed, saved on this phone.',
+                style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
+              ),
+            )
+          else if (!_hasRealMedia)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Text(
@@ -486,7 +610,7 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
             const Padding(
               padding: EdgeInsets.only(top: 10),
               child: Text(
-                'Bundled demo footage — plays locally; not downloadable or shareable as a link.',
+                'Recorded demo footage — plays locally from the bundled demo asset; not downloadable or shareable as a link.',
                 style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
               ),
             ),
@@ -609,6 +733,113 @@ class _Sheen extends StatelessWidget {
   }
 }
 
+/// Path of a real local image for this clip, or null. Synchronous existence
+/// check so a missing file falls back to the gradient instead of a broken card.
+String? _localImagePath(Clip c) {
+  final path = c.localPath ?? c.thumbnailPath;
+  if (path == null || path.startsWith('http')) return null;
+  return File(path).existsSync() ? path : null;
+}
+
+/// The clip's real image (a captured frame) under the card chrome.
+class _ClipArtwork extends StatelessWidget {
+  final Clip clip;
+  const _ClipArtwork({required this.clip});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = _localImagePath(clip);
+    if (path == null) return const SizedBox.shrink();
+    return Image.file(
+      File(path),
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+    );
+  }
+}
+
+/// Marks media that came from the recorded Demo, never from Core/Vision.
+class _DemoBadge extends StatelessWidget {
+  const _DemoBadge();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: BinnacleColors.navyDeep.withValues(alpha: 0.78),
+          borderRadius: BorderRadius.circular(6),
+          border:
+              Border.all(color: BinnacleColors.amber.withValues(alpha: 0.8)),
+        ),
+        child: Text('DEMO',
+            style: BinnacleTheme.mono(
+                size: 8.5,
+                color: BinnacleColors.amber,
+                weight: FontWeight.w700)),
+      );
+}
+
+class _DemoProvenance extends StatelessWidget {
+  final Clip clip;
+  const _DemoProvenance({required this.clip});
+
+  @override
+  Widget build(BuildContext context) {
+    final seg = clip.segment;
+    final where = seg == null
+        ? 'frame of the recorded demo feed'
+        : 'segment ${formatDemoTime(seg.start)}–${formatDemoTime(seg.end)} of the recorded demo feed';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: BinnacleColors.amber.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: BinnacleColors.amber.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        'DEMO — $where. Simulated locally; not captured by Core or Vision.',
+        style: BinnacleTheme.mono(size: 10, color: BinnacleColors.amber),
+      ),
+    );
+  }
+}
+
+/// Play/pause and a position readout relative to the saved segment, so the
+/// start and stop points are visible.
+class _SegmentControls extends StatelessWidget {
+  final MediaSegment segment;
+  final Duration position;
+  final bool playing;
+  final VoidCallback onToggle;
+  const _SegmentControls({
+    required this.segment,
+    required this.position,
+    required this.playing,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    var rel = position - segment.start;
+    if (rel < Duration.zero) rel = Duration.zero;
+    if (rel > segment.length) rel = segment.length;
+    return Row(children: [
+      IconButton(
+        tooltip: playing ? 'Pause' : 'Play',
+        onPressed: onToggle,
+        icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+      ),
+      Text('${formatDemoTime(rel)} / ${formatDemoTime(segment.length)}',
+          style: BinnacleTheme.mono(size: 11)),
+      const Spacer(),
+      Text(
+          'source ${formatDemoTime(segment.start)}–${formatDemoTime(segment.end)}',
+          style: BinnacleTheme.mono(size: 10, color: BinnacleColors.slate)),
+    ]);
+  }
+}
+
 class _KindBadge extends StatelessWidget {
   final ClipKind kind;
   const _KindBadge({required this.kind});
@@ -668,16 +899,22 @@ class _HeroClipCard extends StatelessWidget {
                       colors: palette),
                 ),
               ),
+              _ClipArtwork(clip: clip),
               _Sheen(t: sheenT),
-              const Center(
-                child: Icon(Icons.play_circle_fill,
-                    color: Colors.white70, size: 46),
-              ),
+              if (clip.kind != ClipKind.photo)
+                const Center(
+                  child: Icon(Icons.play_circle_fill,
+                      color: Colors.white70, size: 46),
+                ),
               Positioned(
                 top: 10,
                 left: 10,
                 child: Row(children: [
                   _KindBadge(kind: clip.kind),
+                  if (clip.isDemoOrigin) ...[
+                    const SizedBox(width: 6),
+                    const _DemoBadge(),
+                  ],
                   const SizedBox(width: 6),
                   Container(
                     padding:
@@ -780,12 +1017,22 @@ class _ClipCard extends StatelessWidget {
                     colors: palette),
               ),
             ),
+            _ClipArtwork(clip: clip),
             _Sheen(t: sheenT, phase: phase),
             if (clip.kind != ClipKind.photo)
               const Center(
                   child: Icon(Icons.play_arrow_rounded,
                       color: Colors.white54, size: 30)),
-            Positioned(top: 6, left: 6, child: _KindBadge(kind: clip.kind)),
+            Positioned(
+                top: 6,
+                left: 6,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _KindBadge(kind: clip.kind),
+                  if (clip.isDemoOrigin) ...[
+                    const SizedBox(width: 4),
+                    const _DemoBadge(),
+                  ],
+                ])),
             Positioned(
                 top: 4,
                 right: 4,
