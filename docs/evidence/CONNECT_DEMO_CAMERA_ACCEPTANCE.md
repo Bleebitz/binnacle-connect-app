@@ -45,7 +45,10 @@ existing no-network guarantee.
   09:50–12:00 segment was selected. Final encoded frames at 0, 30, 60, 90,
   120, and 126 seconds confirmed upright orientation, 16:9 crop, continuous
   rider visibility, and the terminal fall/loss event.
-- Static analysis: 0 errors and 0 warnings; 53 existing info-level lints remain.
+- Static analysis (as recorded for the original Demo camera commit, before the
+  2026-09-18 media-controls work; that later work introduced warnings that CI
+  caught, see the 2026-09-18 Tests section): 0 errors and 0 warnings; 53
+  existing info-level lints remained.
 - Flutter tests: 82 passed, 2 intentionally skipped by existing mode/platform
   gates. New coverage verifies Demo/Core source selection, deterministic Track
   reducer boundaries, state publication, the persistent recorded-feed label,
@@ -229,7 +232,7 @@ cropped off).
 | `DEMO — RECORDED CAMERA FEED` visible | Yes |
 | Zoom `+` visibly enlarges the video; label `1.0×`, `1.5×`, `2.0×` | Yes. At 2.0x the horizon and rider move as expected for a centre crop; tags, buttons, and HUD do not scale |
 | Zoom back to `1.0×` with `−` | Yes |
-| Pinch zoom | **Not verified on the device** (see limitations) |
+| Pinch zoom | **Not verified by me or by adb.** Later verified by hand by Levi on the same phone, see the 2026-09-18 manual acceptance addendum below |
 | Snapshot: flash, toast "Snapshot saved to Library and Photos" | Yes |
 | Library shows the actual captured frame | Yes. The two gallery copies are 1920x1080 JPEGs whose best match to frames extracted from the asset is source second 117 and 23, the positions the Library reports (`1:57`, `0:23`) |
 | Save Highlight: toast "Highlight saved to Library"; new Highlight in Library | Yes (`0:11–0:56`, `0:17–1:02`, `0:00–0:45`: the last is the start clamp) |
@@ -267,10 +270,10 @@ Evidence files: `01_live_1.0x.png`, `02_live_2.0x.png`,
   or ePTZ, the real Jetson/WebRTC control path, or Core-authoritative zoom.
   Core Mode's `snapshot`, `save_highlight`, and `nudge_zoom` paths were not
   changed and were not exercised on a device.
-- **Pinch was not verified on the phone.** Injecting a two-finger touch needs
+- **Pinch could not be verified by adb** (superseded by Levi's manual check, see addendum below). Injecting a two-finger touch needs
   write access to `/dev/input/event8`, which the adb shell user does not have
   (`Permission denied`), and `adb shell input` has no pinch. The handler is
-  covered by 4 automated two-pointer gesture tests. Please try it by hand.
+  covered by 4 automated two-pointer gesture tests.
 - **Zoom maximum is 4.0x**, not the product's 6.0x, because the source is 1080p.
   Snapshots are the **full source frame**; they are not cropped to the zoomed
   view.
@@ -296,3 +299,23 @@ Evidence files: `01_live_1.0x.png`, `02_live_2.0x.png`,
   clean at HEAD, so formatting was applied only to new files to keep this diff
   reviewable.
 - Not tested: TalkBack, landscape, long-running soak, or low-storage behavior.
+
+### Addendum — 2026-09-18: manual physical acceptance of pinch-to-zoom
+
+**User-observed physical-device acceptance, not an automated test and not
+something I observed.** Levi manually tested pinch-to-zoom on the Samsung Galaxy
+S25 Ultra (`SM-S938U`) running the installed build below and confirmed that pinch
+zoom works correctly. This is Levi's report; no screenshot or recording of the
+gesture was captured, and the exact zoom levels reached were not recorded.
+
+- Build under test: `versionCode` 2013, APK SHA-256
+  `8BDBCF375993C0202BA300F3E47A223352BF82A2E27D96A2B1EFB61147244785`.
+- The later source cleanup (`1795815`, removal of 3 `unnecessary_cast`
+  warnings) rebuilt to a byte-for-byte identical APK (same SHA-256, same size
+  190,618,268 bytes). The cleanup therefore did not alter the accepted Android
+  binary, and the earlier physical evidence applies to it unchanged.
+- CI for PR #13 head `8879f12edf35d2ba3fddfbf926576854e08e6a4c` is green: `dart
+  analyze`, `flutter test`, Core-mode regression, `flutter build web`, audit
+  and audit self-test, debug and release APK builds (run 35399915406).
+- Scope: this verifies the Connect Demo's local pinch-to-zoom of the recorded
+  feed only. It is not evidence of real Vision/Core physical ePTZ.
