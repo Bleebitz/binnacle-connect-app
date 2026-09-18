@@ -1,0 +1,7 @@
+# Privacy admins whose approval is required before biometric (Spotter AI) code
+# can merge to main or production. One GitHub login per line. Read from the base
+# branch by the guard, so a pull request cannot add itself.
+#
+# Each must have write access to the repository. Add a second person before any
+# biometric work can be merged: the PR author cannot approve their own PR.
+Bleebitz
