@@ -128,9 +128,16 @@ center-cropped viewport with the same HUD layer.
 Demo playback autostarts, loops, and drives a deterministic Vision/Track HUD
 timeline from video position (acquiring → rider locked → tracking → the real
 fall/loss window → reacquiring). It is always labeled
-`DEMO — RECORDED CAMERA FEED`. Camera,
-framing, capture, and vessel controls are disabled for recorded playback, so
-the demo cannot imply or send a hardware action. The bundled asset is a
+`DEMO — RECORDED CAMERA FEED`. Digital **Zoom**, **Snapshot**, and
+**Save Highlight** work locally on the recorded feed: zoom is a presentation
+change of the video, Snapshot saves a real frame of the recording at the current
+playback position, and Save Highlight saves a start/end reference into the
+bundled asset (no video is copied). Local Demo media is tagged , persists
+across restarts, and is never presented as Core-captured. Presets, orientation,
+trigger mode, arm/disarm, and broadcast remain disabled, and no Core command is
+sent, so the demo cannot imply or send a hardware action. See
+ for the revision and its limits.
+The bundled asset is a
 130-second, fixed-stern GoPro rider pass trimmed from owner-supplied
 `GX010048.MP4`, normalized to a 1920×1080 H.264 High 4:2:0 MP4, and stripped
 of audio for demo playback.
