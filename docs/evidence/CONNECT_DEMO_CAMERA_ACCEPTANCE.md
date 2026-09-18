@@ -180,7 +180,14 @@ sent by any local Demo action, and no Core acknowledgement is claimed.
 
 ### Tests
 
-`flutter analyze`: 0 errors, 0 warnings (60 info-level lints, existing style).
+`dart analyze` (the CI command) exits 0: 0 errors, 0 warnings, 60 info-level
+lints of existing style. **Correction:** the first push of this branch failed
+CI's `dart analyze` on 3 `unnecessary_cast` warnings in my zoom-column code. My
+earlier local check used a filter that missed them, so my earlier statement of
+"0 warnings" was wrong. Fixed in `1795815`; the release APK built from the
+fixed tree is byte-identical (same SHA-256), so the device evidence below
+applies to it. The Core-mode regression run, `flutter build web`, and the audit
+self-test also pass locally (the self-test needs `python3` on PATH).
 `flutter test`: 129 passed, 2 skipped by existing mode gates. New coverage:
 
 - `demo_media_logic_test.dart` (22): zoom steps and clamping, highlight window
@@ -242,7 +249,9 @@ Evidence files: `01_live_1.0x.png`, `02_live_2.0x.png`,
 
 - Branch: `bin-connect-demo-media-controls` (from `bin-connect-demo-camera-simulation`
   at `54e134a`).
-- Implementation commit: `48bfab0cd277a2acf28c92908984133d61427f04`.
+- Implementation commit: `48bfab0cd277a2acf28c92908984133d61427f04`, plus the
+  analyzer fix `1795815ee846c1de5358034a089cc082f6779dd9` (APK bytes identical
+  before and after the fix).
 - `flutter build apk --release --build-number=2013` (debug-signed, as in the
   established device workflow; not production-signed).
 - APK: `flutter_app/build/app/outputs/flutter-apk/app-release.apk`, 190,618,268
