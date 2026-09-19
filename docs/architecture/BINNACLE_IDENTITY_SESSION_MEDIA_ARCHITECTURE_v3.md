@@ -1,6 +1,6 @@
 # Binnacle Identity, Session & Media Architecture v3
 
-**Status:** Owner-approved architecture draft; pending controlled preservation in the canonical repository and durable program records.  
+Status: Owner-approved controlling architecture; preserved on main. Durable program-record reconciliation pending.  
 **Owner decision date:** 2026-09-19  
 **Applies to:** Binnacle Cloud, Connect, Vision, Track and Spotter  
 **Primary implementation issues:** BIN-46, BIN-40, BIN-41, BIN-43, BIN-48, BIN-39  
