@@ -1,3 +1,31 @@
+> **SUPERSEDED ARCHITECTURE — RETAINED FOR DESIGN HISTORY**
+>
+> This document, **`CORE_USER_ACCOUNT_API_PROPOSAL.md` v2.5**, is retained as historical architecture evidence and must not be deleted or rewritten to reflect later decisions.
+>
+> As of **2026-09-19**, its controlling architecture has been superseded by:
+>
+> `docs/architecture/BINNACLE_IDENTITY_SESSION_MEDIA_ARCHITECTURE_v3.md`
+>
+> The v3 architecture incorporates and replaces the controlling identity, device, Vision ownership, Ride Session, Crew, Active Rider, media, entitlement, privacy/takedown, Spotter recognition, recovery, and provider decisions previously contained here.
+>
+> Important superseded v2.5 assumptions include, but are not limited to:
+>
+> - “Rider Account” as the universal human-account model; v3 uses a **Global Binnacle Account** with an optional Rider Profile.
+> - permanent/per-boat Crew identity concepts; v3 uses **temporary Ride Session authorization**.
+> - lack of a distinct Active Rider / Rider Run model; v3 separates Crew membership from who is currently riding.
+> - automatic `unit_owner_master` personal Library pointers to every clip.
+> - ordinary Vision-owner `delete-for-all` authority over already-distributed rider media.
+> - narrower Rider Identity Assertion terminology; v3 defines a broader **Binnacle Identity Assertion (BIA)**.
+> - incomplete session-recovery behavior; v3 defines reconnection and a **60-minute Vision session-recovery window**.
+> - optional wording around Guest Claim Codes; v3 requires the approved **two-form local/remote Claim Code architecture with a 30-day expiration**.
+> - older AWS live-stack references; **AWS IVS and AWS MediaLive are deprecated** and Cloudflare Stream is the controlling live pipeline.
+>
+> Security, token, offline-operation, hardware-transfer, Cloudflare R2/Stream, Supabase Auth, and other technical material in this document may still provide useful historical context where it does not conflict with v3.
+>
+> **Do not implement from this file where v3 differs.**
+>
+> Historical revision notes and prior owner decisions below remain intentionally unchanged.
+
 # Core-side User Account API — Proposal (not yet implemented)
 
 **Status: proposal only.** Nothing in this document is built, deployed, or
