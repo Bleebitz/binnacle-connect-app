@@ -46,6 +46,30 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.textContaining('Live video unavailable'), findsOneWidget);
     expect(find.text('Telemetry unavailable'), findsOneWidget);
+
+    // BIN-9: a Core build must never expose a control that fabricates a
+    // man-overboard alert locally — MobAlertState.trigger() bypasses the
+    // Core entirely, so this demo-only affordance must not render here.
+    expect(find.text('Simulate fall alert (demo)'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, skip: AppConfig.isDemo);
+
+  testWidgets('Core mode never exposes the debug pairing-simulation affordance', (tester) async {
+    await tester.pumpWidget(const BinnacleConnectApp());
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // Unpaired on a fresh Core-mode launch, so My Boat's "Pair a device"
+    // entry point is present — follow it into the real PairingScreen.
+    await tester.tap(find.text('Pair a device'));
+    await tester.pumpAndSettle();
+
+    // BIN-6: debugSimulatePairing() fabricates a credential and throws
+    // StateError outside demo mode — this button must not render at all in
+    // a Core build, not merely fail safely if tapped.
+    expect(find.text('Simulate pairing to an unclaimed unit'), findsNothing);
+    expect(find.textContaining('DEMO ONLY'), findsNothing);
+
     await tester.pumpWidget(const SizedBox.shrink());
   }, skip: AppConfig.isDemo);
 }
