@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../core/models/rider_track.dart';
 import '../../core/services/camera_media_source.dart';
 import '../../core/services/demo_media.dart';
+import '../../core/services/track_framing.dart';
 import '../../core/services/webrtc_service.dart';
 import '../theme/binnacle_theme.dart';
+import 'rider_box_painter.dart';
 import 'simulated_wake_view.dart';
 
 /// Electronic PTZ video surface. Recorded Demo and live WebRTC sources render
@@ -27,12 +32,16 @@ class EptzVideoView extends StatelessWidget {
   /// draws the label itself, inside the display safe area.
   final bool showDemoLabel;
 
+  /// Keeps the rider tag below a HUD strip along the top (the landscape console).
+  final double tagTopInset;
+
   const EptzVideoView({
     super.key,
     required this.source,
     this.fit = BoxFit.cover,
     this.enablePinch = true,
     this.showDemoLabel = true,
+    this.tagTopInset = 0,
   });
 
   @override
@@ -45,7 +54,11 @@ class EptzVideoView extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (source case DemoRecordedCameraSource demo)
-              _DemoRecordedVideo(source: demo, fit: fit, enablePinch: enablePinch)
+              _DemoRecordedVideo(
+                  source: demo,
+                  fit: fit,
+                  enablePinch: enablePinch,
+                  tagTopInset: tagTopInset)
             else
               StreamBuilder<void>(
                 stream:
@@ -111,15 +124,22 @@ class _DemoRecordedVideo extends StatefulWidget {
   final DemoRecordedCameraSource source;
   final BoxFit fit;
   final bool enablePinch;
+  final double tagTopInset;
   const _DemoRecordedVideo(
-      {required this.source, required this.fit, required this.enablePinch});
+      {required this.source,
+      required this.fit,
+      required this.enablePinch,
+      required this.tagTopInset});
 
   @override
   State<_DemoRecordedVideo> createState() => _DemoRecordedVideoState();
 }
 
-class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
+class _DemoRecordedVideoState extends State<_DemoRecordedVideo>
+    with SingleTickerProviderStateMixin {
   late final VideoPlayerController _controller;
+  late final Ticker _ticker;
+  Duration _lastTick = Duration.zero;
   bool _ready = false;
   bool _failed = false;
 
@@ -128,7 +148,29 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
     super.initState();
     _controller = VideoPlayerController.asset(widget.source.assetPath)
       ..addListener(_onVideoTick);
+    // One frame callback advances the rider box and crop from the player's
+    // (extrapolated) position; see DemoPlaybackClock. It reads the player, it is
+    // not a second clock.
+    _ticker = createTicker((elapsed) {
+      final dt = (elapsed - _lastTick).inMicroseconds / 1e6;
+      _lastTick = elapsed;
+      widget.source.tick(dt.clamp(0.0, 0.1).toDouble());
+    });
     _initialize();
+    _loadRiderTrack();
+  }
+
+  /// The pre-authored spatial rider track ships as a small JSON asset. A missing
+  /// or invalid file leaves the Demo without a rider overlay (centre framing);
+  /// it is never replaced by invented positions.
+  Future<void> _loadRiderTrack() async {
+    try {
+      final text = await rootBundle.loadString(DemoRiderTrack.assetPath);
+      final track = DemoRiderTrack.parse(text);
+      if (mounted) widget.source.attachRiderTrack(track);
+    } catch (_) {
+      if (mounted) widget.source.attachRiderTrack(null);
+    }
   }
 
   Future<void> _initialize() async {
@@ -143,18 +185,23 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
         duration: _controller.value.duration,
         seekTo: _controller.seekTo,
       );
-      if (mounted) setState(() => _ready = true);
+      if (mounted) {
+        setState(() => _ready = true);
+        _ticker.start();
+      }
     } catch (_) {
       if (mounted) setState(() => _failed = true);
     }
   }
 
   void _onVideoTick() {
-    widget.source.updatePlaybackPosition(_controller.value.position);
+    widget.source.updatePlaybackPosition(_controller.value.position,
+        playing: _controller.value.isPlaying);
   }
 
   @override
   void dispose() {
+    _ticker.dispose();
     widget.source.detachPlayer();
     _controller.removeListener(_onVideoTick);
     _controller.dispose();
@@ -175,35 +222,110 @@ class _DemoRecordedVideoState extends State<_DemoRecordedVideo> {
     if (!_ready || !_controller.value.isInitialized) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
-    final size = _controller.value.size;
-    final video = ClipRect(
-      child: FittedBox(
-        fit: widget.fit,
-        alignment: Alignment.center,
-        child: SizedBox(
-          width: size.width,
-          height: size.height,
-          child: VideoPlayer(_controller),
-        ),
-      ),
+    final source = widget.source;
+    final fit =
+        widget.fit == BoxFit.contain ? FrameFit.contain : FrameFit.cover;
+    final stage = DemoFramedStage(
+      source: source,
+      videoSize: _controller.value.size,
+      fit: fit,
+      tagTopInset: widget.tagTopInset,
+      child: VideoPlayer(_controller),
     );
-    // Digital zoom is a local presentation change of the recorded video only;
-    // the surrounding controls and labels are siblings in the parent Stack and
-    // are never scaled.
-    final zoomed = ValueListenableBuilder<double>(
-        valueListenable: widget.source.zoom,
-        child: video,
-        builder: (context, zoom, child) => ClipRect(
-          child: Transform.scale(
-            scale: zoom,
-            alignment: Alignment.center,
-            child: child,
-          ),
+    return widget.enablePinch
+        ? DemoPinchZoom(zoom: source.zoom, child: stage)
+        : stage;
+  }
+}
+
+/// The recorded feed's framed stage: the video (any [child] the size of the
+/// source) drawn through the shared [FramingGeometry], with the rider box drawn
+/// through the SAME geometry so pixels and marker cannot disagree at any zoom or
+/// pan. Digital zoom and Track Follow panning are presentation of the recorded
+/// video only; surrounding controls and labels are siblings in the parent Stack
+/// and are never scaled.
+class DemoFramedStage extends StatelessWidget {
+  final DemoRecordedCameraSource source;
+  final Size videoSize;
+  final FrameFit fit;
+  final Widget child;
+
+  /// Height of any HUD strip along the top that the rider tag must stay below.
+  final double tagTopInset;
+
+  const DemoFramedStage({
+    super.key,
+    required this.source,
+    required this.videoSize,
+    required this.fit,
+    required this.child,
+    this.tagTopInset = 0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final framing = source.framing;
+    return LayoutBuilder(builder: (context, c) {
+      final viewport = Size(c.maxWidth, c.maxHeight);
+      // Publish the layout to the shared framing (after this frame).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        framing.setViewport(viewport, fit);
+      });
+      return ClipRect(
+        child: AnimatedBuilder(
+          animation: Listenable.merge([framing, source.zoom]),
+          builder: (context, _) {
+            final g = framing.geometry ??
+                FramingGeometry(
+                    source: videoSize,
+                    viewport: viewport,
+                    fit: fit,
+                    zoom: source.zoom.value);
+            final m = g.matrix;
+            final target = framing.target;
+            final style = source.boxStyle;
+            return Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.hardEdge,
+              children: [
+                OverflowBox(
+                  alignment: Alignment.topLeft,
+                  minWidth: 0,
+                  minHeight: 0,
+                  maxWidth: videoSize.width,
+                  maxHeight: videoSize.height,
+                  child: Transform(
+                    key: const ValueKey('video-transform'),
+                    alignment: Alignment.topLeft,
+                    transform: Matrix4.identity()
+                      ..translateByDouble(m.tx, m.ty, 0, 1)
+                      ..scaleByDouble(m.scale, m.scale, 1, 1),
+                    child: SizedBox(
+                      width: videoSize.width,
+                      height: videoSize.height,
+                      child: child,
+                    ),
+                  ),
+                ),
+                if (target != null && style != null)
+                  IgnorePointer(
+                    child: RepaintBoundary(
+                      child: CustomPaint(
+                        key: const ValueKey('rider-box'),
+                        painter: RiderBoxPainter(
+                          rect: g.boxToScreen(target.box),
+                          style: style,
+                          tagTopInset: tagTopInset,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       );
-    return widget.enablePinch
-        ? DemoPinchZoom(zoom: widget.source.zoom, child: zoomed)
-        : zoomed;
+    });
   }
 }
 

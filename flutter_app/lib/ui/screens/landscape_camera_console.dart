@@ -20,6 +20,7 @@ import '../../core/models/clip.dart' as models;
 import '../../core/models/vessel_state.dart';
 import '../../core/services/camera_media_source.dart';
 import '../../core/services/demo_media.dart';
+import '../../core/services/track_framing.dart';
 import '../../core/services/telemetry_socket.dart';
 import '../theme/binnacle_theme.dart';
 import '../widgets/telemetry_overlay.dart';
@@ -49,11 +50,16 @@ class ConsoleBindings {
   final Set<DemoViewMode> enabledViewModes;
   final ValueChanged<DemoViewMode> onViewMode;
 
-  // Rider Lock. `lockTargets == null` means the source has no target data.
-  final List<SimRiderTarget>? lockTargets;
+  // Rider Lock. In Recorded Demo the rider box is drawn on the video itself
+  // (pre-authored spatial annotation) and tapping it locks it. Core has no
+  // target data yet, so `framing` is null there and nothing is offered.
+  final DemoFraming? framing;
   final String? lockedId;
   final ValueChanged<String> onLock;
   final VoidCallback onClearLock;
+
+  /// MANUAL only: pan the crop by a one-finger drag of this many screen pixels.
+  final ValueChanged<Offset> onPanManual;
 
   const ConsoleBindings({
     required this.isDemo,
@@ -71,10 +77,11 @@ class ConsoleBindings {
     required this.viewMode,
     required this.enabledViewModes,
     required this.onViewMode,
-    required this.lockTargets,
+    required this.framing,
     required this.lockedId,
     required this.onLock,
     required this.onClearLock,
+    required this.onPanManual,
   });
 }
 
@@ -136,6 +143,9 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
     if (d.pointerCount >= 2) {
       _multiTouch = true;
       if (b.pinchEnabled) b.onZoomTo(_pinchBase * d.scale);
+    } else if (b.viewMode == DemoViewMode.manual && b.framing != null) {
+      // MANUAL: one finger pans the crop (clamped to the video by the framing).
+      b.onPanManual(d.focalPointDelta);
     }
   }
 
@@ -145,7 +155,10 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
     final delta = _dragNow - _dragStart;
     final topInset = MediaQuery.paddingOf(context).top;
     final startsInSystemStrip = _dragStart.dy < topInset + 28;
+    // In MANUAL a one-finger drag pans, so the swipe gesture is not offered
+    // there; the Clean View button still works.
     if (!_multiTouch &&
+        b.viewMode != DemoViewMode.manual &&
         !startsInSystemStrip &&
         delta.dy > 72 &&
         delta.dy.abs() > delta.dx.abs() * 1.5) {
@@ -154,13 +167,37 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
     _multiTouch = false;
   }
 
-  void _onTap() {
+  /// The rider box under [position], if the operator tapped it. Uses the same
+  /// FramingGeometry that draws the box, with a generous margin for wet hands.
+  bool _hitsRiderBox(Offset position) {
+    final framing = b.framing;
+    final source = widget.source;
+    if (framing == null || source is! DemoRecordedCameraSource) return false;
+    final g = framing.geometry;
+    final target = framing.target;
+    final style = source.boxStyle;
+    if (g == null || target == null || style == null) return false;
+    // A coasting box is a last-known position, not a confirmed rider.
+    if (style == RiderBoxStyle.coasting) return false;
+    return g.boxToScreen(target.box).inflate(16).contains(position);
+  }
+
+  void _onTapAt(Offset position) {
     if (ui.cleanView) {
       ui.exitCleanView();
-    } else {
-      ui.closeRiderPicker();
-      ui.interact();
+      return;
     }
+    final target = b.framing?.target;
+    if (target != null && _hitsRiderBox(position)) {
+      // Tapping the rider on the video locks them: the interaction real Track
+      // targets will use.
+      ui.interact();
+      HapticFeedback.selectionClick();
+      b.onLock(target.id);
+      return;
+    }
+    ui.closeRiderPicker();
+    ui.interact();
   }
 
   @override
@@ -181,7 +218,7 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
                 onPointerDown: (_) => ui.interact(),
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: _onTap,
+                  onTapUp: (d) => _onTapAt(d.localPosition),
                   onDoubleTap: () {
                     ui.interact();
                     b.onZoomToggle();
@@ -303,9 +340,11 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
       child: ValueListenableBuilder<VisionTrackState>(
         valueListenable: widget.source.trackState,
         builder: (_, track, __) {
-          final showReticle = track.riderVisible &&
-              b.viewMode == DemoViewMode.trackFollow &&
-              (b.isDemo ? b.lockedId != null : true);
+          // Recorded Demo draws its rider box ON the video, from the spatial
+          // annotation. This centred reticle is not spatial, so Demo never uses it.
+          final showReticle = !b.isDemo &&
+              track.riderVisible &&
+              b.viewMode == DemoViewMode.trackFollow;
           if (!showReticle) return const SizedBox.shrink();
           return Center(
             child: ProximityReticle(
@@ -335,7 +374,7 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
     final capture = widget.vessel.capture;
     final warning = _warning();
     final lock = b.isDemo
-        ? (b.lockedId == null ? 'NO LOCK' : 'LOCK · SIM')
+        ? (b.lockedId == null ? 'TAP RIDER TO LOCK' : 'LOCK · SIM')
         : 'LOCK · N/A';
     final rec = b.isDemo
         ? 'PLAYBACK · NOT REC'
@@ -427,9 +466,26 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
         _RoundBtn(
           key: const ValueKey('console-rider-lock'),
           icon: b.lockedId != null ? Icons.lock : Icons.person_pin_circle,
-          tooltip: 'Rider Lock',
+          tooltip: b.lockedId != null ? 'Clear Rider Lock' : 'Rider Lock',
           active: ui.riderPickerOpen || b.lockedId != null,
-          onTap: ui.toggleRiderPicker,
+          onTap: () {
+            final target = b.framing?.target;
+            if (b.framing == null) {
+              // Core: no target data exists yet; say so instead of pretending.
+              ui.toggleRiderPicker();
+            } else if (b.lockedId != null) {
+              ui.interact();
+              b.onClearLock();
+            } else if (target != null &&
+                (widget.source is! DemoRecordedCameraSource ||
+                    (widget.source as DemoRecordedCameraSource).boxStyle !=
+                        RiderBoxStyle.coasting)) {
+              ui.interact();
+              b.onLock(target.id);
+            } else {
+              ui.interact();
+            }
+          },
         ),
         const SizedBox(height: 8),
         Row(mainAxisSize: MainAxisSize.min, children: [
@@ -558,52 +614,17 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
 
   // ---- panels -------------------------------------------------------------
 
+  /// Shown only in Core Mode, where no Track target data exists yet.
   Widget _riderPicker() {
-    final targets = b.lockTargets;
     return _Panel(
-      key: const ValueKey('console-rider-picker'),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('RIDER LOCK',
-              style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
-                  color: BinnacleColors.offWhite)),
-          const SizedBox(height: 6),
-          if (targets == null)
-            const SizedBox(
-              width: 210,
-              child: Text(
-                'Rider selection needs Binnacle Track target data from the '
-                'Core. Not available yet.',
-                style:
-                    TextStyle(fontSize: 12, color: BinnacleColors.slateLight),
-              ),
-            )
-          else ...[
-            const Text('Simulated targets — not detections',
-                style: TextStyle(fontSize: 11, color: BinnacleColors.amber)),
-            const SizedBox(height: 6),
-            for (final t in targets)
-              _TargetRow(
-                key: ValueKey('console-target-${t.id}'),
-                label: t.label,
-                selected: b.lockedId == t.id,
-                onTap: () {
-                  ui.interact();
-                  b.onLock(t.id);
-                },
-              ),
-            if (b.lockedId != null)
-              TextButton(
-                key: const ValueKey('console-clear-lock'),
-                onPressed: b.onClearLock,
-                child: const Text('Clear lock'),
-              ),
-          ],
-        ],
+      key: const ValueKey('console-rider-note'),
+      child: const SizedBox(
+        width: 230,
+        child: Text(
+          'RIDER LOCK\nRider selection needs Binnacle Track target data from '
+          'the Core. Not available yet.',
+          style: TextStyle(fontSize: 12, color: BinnacleColors.slateLight),
+        ),
       ),
     );
   }
@@ -625,6 +646,11 @@ class _LandscapeCameraConsoleState extends State<LandscapeCameraConsole> {
             : 'unavailable'
       ),
       ('Camera', demo ? 'recorded file' : widget.linkStatus.name),
+      if (demo)
+        (
+          'Rider box',
+          'pre-authored annotation of this footage (not live detection)'
+        ),
       ('Wake / rider metrics', 'unavailable'),
       ('Battery / power', 'unavailable'),
     ];
@@ -940,53 +966,6 @@ class _ViewModeSelector extends StatelessWidget {
       ),
     );
   }
-}
-
-class _TargetRow extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _TargetRow(
-      {super.key,
-      required this.label,
-      required this.selected,
-      required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          width: 230,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
-            color: selected
-                ? BinnacleColors.teal
-                : BinnacleColors.navy.withValues(alpha: 0.9),
-            border: Border.all(
-                color:
-                    selected ? BinnacleColors.offWhite : BinnacleColors.slate),
-          ),
-          child: Row(children: [
-            Icon(selected ? Icons.lock : Icons.radio_button_unchecked,
-                size: 18,
-                color: selected
-                    ? BinnacleColors.navyDeep
-                    : BinnacleColors.offWhite),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: selected
-                          ? BinnacleColors.navyDeep
-                          : BinnacleColors.offWhite)),
-            ),
-          ]),
-        ),
-      );
 }
 
 /// The shutter-sized Save Highlight control with a ring pulse on each save.

@@ -278,6 +278,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         fit: portrait ? BoxFit.cover : BoxFit.contain,
         enablePinch: portrait,
         showDemoLabel: portrait,
+        tagTopInset: portrait ? 0 : 78,
       );
 
   ConsoleBindings _consoleBindings(ControlChannelService control) {
@@ -301,10 +302,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
         viewMode: source.viewMode.value,
         enabledViewModes: DemoViewMode.values.toSet(),
         onViewMode: (m) => source.viewMode.value = m,
-        lockTargets: DemoRiderLock.targets,
+        framing: source.framing,
         lockedId: source.riderLock.value,
-        onLock: source.riderLock.select,
+        onLock: source.riderLock.lock,
         onClearLock: source.riderLock.clear,
+        onPanManual: source.framing.panManual,
       );
     }
     // Core Mode: authoritative Core paths, unchanged. There is no local
@@ -335,10 +337,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
             m == DemoViewMode.manual ? 'manual' : 'ai',
             actor: 'levi',
           )),
-      lockTargets: null,
+      framing: null,
       lockedId: null,
       onLock: (_) {},
       onClearLock: () {},
+      onPanManual: (_) {},
     );
   }
 
@@ -350,6 +353,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
         source.zoom,
         source.viewMode,
         source.riderLock,
+        source.framing,
       ],
     ];
     return ListenableBuilder(
@@ -474,7 +478,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       builder: (_, track, __) => Stack(
                         fit: StackFit.expand,
                         children: [
-                          if (track.riderVisible)
+                          // Recorded Demo draws its rider box on the video itself from the
+                          // spatial annotation; this centred reticle is not spatial.
+                          if (track.riderVisible && _mediaSource is! DemoRecordedCameraSource)
                             Center(child: ProximityReticle(riderDistanceM: telemetry.latest.riderDistanceM)),
                           Positioned(
                             top: 37,

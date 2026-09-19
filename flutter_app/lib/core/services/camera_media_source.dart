@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import '../models/rider_track.dart';
 import 'demo_media.dart';
+import 'track_framing.dart';
 import 'webrtc_service.dart';
 
 enum CameraMediaKind { demoRecordedAsset, liveWebRtc }
@@ -77,6 +79,13 @@ class DemoVisionTrackReducer {
 abstract class CameraMediaSource {
   CameraMediaKind get kind;
   ValueListenable<VisionTrackState> get trackState;
+
+  /// Spatial targets the UI can mark and frame. This is the contract real
+  /// Binnacle Track will later fill from the Core. The recorded Demo fills it
+  /// from its pre-authored annotation (provenance says so); the live source
+  /// stays EMPTY until real Core target data exists, and never fabricates any.
+  ValueListenable<List<TrackTargetState>> get targets;
+
   bool get isRecordedDemo => kind == CameraMediaKind.demoRecordedAsset;
   void dispose();
 
@@ -114,6 +123,28 @@ abstract interface class DemoMediaControls {
 
   ValueNotifier<DemoViewMode> get viewMode;
   DemoRiderLock get riderLock;
+
+  /// The shared framing for the video, the rider box and tap hit-testing.
+  DemoFraming get framing;
+
+  /// How the current target should be drawn (null: draw nothing).
+  RiderBoxStyle? get boxStyle;
+}
+
+/// How the rider box is drawn. Derived from the Demo Track state (so the box
+/// never looks more certain than the state label) and from Rider Lock.
+enum RiderBoxStyle {
+  /// Seen but not yet acquired/locked: amber outline.
+  candidate,
+
+  /// Confirmed and locked by the operator: teal, `RIDER LOCKED`.
+  locked,
+
+  /// Tracking without an operator lock: white/teal outline.
+  tracking,
+
+  /// Lost recently; last-known box: dashed, reduced, `COASTING`.
+  coasting,
 }
 
 class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
@@ -138,6 +169,18 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
 
   final ValueNotifier<Duration> _position = ValueNotifier(Duration.zero);
 
+  /// Extrapolates the player's position between its polls so the rider box and
+  /// crop move every frame. The player stays the only clock: every report
+  /// re-anchors it and a seek or loop is adopted immediately.
+  final DemoPlaybackClock clock;
+
+  @override
+  late final DemoFraming framing =
+      DemoFraming(zoom: zoom, viewMode: viewMode, riderLock: riderLock);
+
+  final ValueNotifier<List<TrackTargetState>> _targets = ValueNotifier(const []);
+  bool _seekPending = false;
+
   Duration _lastPosition = Duration.zero;
   Duration? _sourceDuration;
   Future<Duration?> Function()? _positionReader;
@@ -146,7 +189,8 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   DemoRecordedCameraSource({
     this.assetPath = defaultAssetPath,
     this.reducer = const DemoVisionTrackReducer(),
-  });
+    DemoPlaybackClock? clock,
+  }) : clock = clock ?? DemoPlaybackClock();
 
   @override
   CameraMediaKind get kind => CameraMediaKind.demoRecordedAsset;
@@ -160,6 +204,54 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   @override
   Duration? get sourceDuration => _sourceDuration;
 
+  @override
+  ValueListenable<List<TrackTargetState>> get targets => _targets;
+
+  /// Loads the pre-authored spatial rider track for this recorded asset. A
+  /// track annotated for a different source video is refused, so it can never
+  /// be drawn over footage it does not describe.
+  void attachRiderTrack(DemoRiderTrack? track) {
+    if (track != null && track.sourceAsset != assetPath) {
+      framing.attachTrack(null);
+      return;
+    }
+    framing.attachTrack(track);
+  }
+
+  @override
+  RiderBoxStyle? get boxStyle {
+    final t = framing.target;
+    if (t == null) return null;
+    final phase = _trackState.value.phase;
+    if (t.isCoasting || phase == VisionTrackPhase.occluded) {
+      return RiderBoxStyle.coasting;
+    }
+    if (phase == VisionTrackPhase.acquiring ||
+        phase == VisionTrackPhase.unavailable) {
+      return RiderBoxStyle.candidate;
+    }
+    return riderLock.isLockedOn(t.id)
+        ? RiderBoxStyle.locked
+        : RiderBoxStyle.tracking;
+  }
+
+  /// Advance the per-frame framing. Called by the video view's frame callback.
+  /// Uses the extrapolated player position, so there is no second timeline.
+  void tick(double dt) {
+    final pos = clock.now;
+    final next = reducer.reduce(pos);
+    if (_trackState.value.phase != next.phase) _trackState.value = next;
+    framing.update(pos, dt: dt, seeked: _seekPending);
+    _seekPending = false;
+    final t = framing.target;
+    final cur = _targets.value;
+    if (t == null) {
+      if (cur.isNotEmpty) _targets.value = const [];
+    } else if (cur.isEmpty || cur.first.box != t.box || cur.first.visibility != t.visibility) {
+      _targets.value = [t];
+    }
+  }
+
   /// The video player registers itself here. Its position is the single clock
   /// for Track state, Snapshot and Save Highlight; there is no second timer.
   void attachPlayer({
@@ -170,6 +262,7 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
     _seeker = seekTo;
     _positionReader = readPosition;
     _sourceDuration = duration;
+    clock.duration = duration;
   }
 
   void detachPlayer() {
@@ -194,9 +287,10 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
     await readPlaybackPosition();
   }
 
-  void updatePlaybackPosition(Duration position) {
+  void updatePlaybackPosition(Duration position, {bool playing = true}) {
     _lastPosition = position;
     _position.value = position;
+    if (clock.anchor(position, playing: playing)) _seekPending = true;
     final next = reducer.reduce(position);
     if (_trackState.value.phase != next.phase) _trackState.value = next;
   }
@@ -219,6 +313,8 @@ class DemoRecordedCameraSource implements CameraMediaSource, DemoMediaControls {
   void dispose() {
     _trackState.dispose();
     _position.dispose();
+    _targets.dispose();
+    framing.dispose();
     viewMode.dispose();
     riderLock.dispose();
     zoom.dispose();
@@ -241,10 +337,24 @@ class LiveWebRtcCameraSource implements CameraMediaSource {
   @override
   ValueListenable<VisionTrackState> get trackState => _trackState;
 
+  final ValueNotifier<List<TrackTargetState>> _targets = ValueNotifier(const []);
+
+  /// Empty until the Core supplies real Track targets. Deliberately not filled
+  /// from anything local: BIN-51 (Jetson-to-app stream and HUD timing) is open.
+  @override
+  ValueListenable<List<TrackTargetState>> get targets => _targets;
+
   /// Ready for the Core/Vision state adapter once its Track-state schema is
   /// finalized. This is deliberately not inferred from WebRTC link status.
   void acceptTrackState(VisionTrackState state) => _trackState.value = state;
 
+  /// Ready for the Core/Vision target adapter. Only real Track output may be
+  /// passed here.
+  void acceptTargets(List<TrackTargetState> targets) => _targets.value = targets;
+
   @override
-  void dispose() => _trackState.dispose();
+  void dispose() {
+    _trackState.dispose();
+    _targets.dispose();
+  }
 }

@@ -59,38 +59,20 @@ class DemoZoom extends ValueNotifier<double> {
 /// UI shows; no ePTZ framing is performed by a recorded video.
 enum DemoViewMode { raw, trackFollow, manual }
 
-/// A candidate person for Rider Lock in the recorded demo. These are SIMULATED
-/// targets, not detections: the recorded clip carries no per-frame detector
-/// output. Real targets will come from Binnacle Track.
-@immutable
-class SimRiderTarget {
-  final String id;
-  final String label;
-  const SimRiderTarget(this.id, this.label);
-}
-
-/// Locally simulated Rider Lock selection for the recorded demo. It is Demo
-/// presentation state only and never an authoritative Track/Core lock.
+/// Rider Lock for the recorded Demo: the operator's local confirmation that the
+/// boxed target is the intended rider. It is Demo presentation state only and
+/// never an authoritative Track or Core lock. There is exactly one annotated
+/// target in the controlled footage, so this is simply locked or not locked.
 class DemoRiderLock extends ValueNotifier<String?> {
-  static const targets = [
-    SimRiderTarget('rider', 'RIDER (recorded pass)'),
-    SimRiderTarget('other', 'PERSON 2 (simulated)'),
-  ];
+  DemoRiderLock() : super(null);
 
-  DemoRiderLock() : super('rider');
+  bool get isLocked => value != null;
 
-  void select(String id) {
-    if (targets.any((t) => t.id == id)) value = id;
-  }
+  bool isLockedOn(String targetId) => value == targetId;
+
+  void lock(String targetId) => value = targetId;
 
   void clear() => value = null;
-
-  SimRiderTarget? get selected {
-    for (final t in targets) {
-      if (t.id == value) return t;
-    }
-    return null;
-  }
 }
 
 /// The window of the recorded source a Save Highlight covers, anchored on the

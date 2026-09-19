@@ -5,6 +5,8 @@
 import 'dart:io';
 
 import 'package:binnacle_connect/core/models/clip.dart';
+import 'package:binnacle_connect/core/models/rider_track.dart';
+import 'package:binnacle_connect/core/services/track_framing.dart';
 import 'package:binnacle_connect/core/services/camera_media_source.dart';
 import 'package:binnacle_connect/core/services/control_channel_service.dart';
 import 'package:binnacle_connect/core/services/demo_media.dart';
@@ -19,6 +21,7 @@ import 'package:binnacle_connect/ui/screens/landscape_console_controller.dart';
 import 'package:binnacle_connect/ui/screens/library_screen.dart';
 import 'package:binnacle_connect/ui/theme/binnacle_theme.dart';
 import 'package:binnacle_connect/ui/widgets/eptz_video_view.dart';
+import 'package:binnacle_connect/ui/widgets/rider_box_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -155,7 +158,7 @@ void main() {
       final h = _Harness();
       await _start(tester, h, size: _port);
       h.demo.zoom.setZoom(2.5);
-      h.demo.riderLock.select('other');
+      h.demo.riderLock.lock('rider');
       h.demo.viewMode.value = DemoViewMode.raw;
       final first = tester.element(find.byType(EptzVideoView));
 
@@ -170,7 +173,7 @@ void main() {
           reason: 'the video (and its player) must be moved, not rebuilt');
       expect(find.byType(EptzVideoView), findsOneWidget);
       expect(h.demo.zoom.value, 2.5);
-      expect(h.demo.riderLock.value, 'other');
+      expect(h.demo.riderLock.value, 'rider');
       expect(h.demo.viewMode.value, DemoViewMode.raw);
       expect(h.seeks, isEmpty, reason: 'rotation must not seek the video');
       await tester.pump(const Duration(seconds: 4));
@@ -260,7 +263,7 @@ void main() {
       // Persistent minimum HUD: Demo label, Track, lock, rec, link, zoom.
       expect(find.text('DEMO — RECORDED CAMERA FEED'), findsOneWidget);
       expect(_k('console-zoom-chip'), findsOneWidget);
-      expect(find.text('LOCK · SIM'), findsOneWidget);
+      expect(find.text('TAP RIDER TO LOCK'), findsOneWidget);
       expect(find.text('PLAYBACK · NOT REC'), findsOneWidget);
       expect(find.text('LINK SIMULATED'), findsOneWidget);
       expect(find.textContaining('TRACK'), findsWidgets);
@@ -612,39 +615,6 @@ void main() {
   });
 
   group('Rider Lock and view modes', () {
-    testWidgets('Demo: selecting a target is obvious and labelled simulated',
-        (tester) async {
-      final h = _Harness();
-      await _start(tester, h);
-      await tester.tap(_k('console-rider-lock'));
-      await tester.pump();
-      expect(_k('console-rider-picker'), findsOneWidget);
-      expect(find.text('Simulated targets — not detections'), findsOneWidget);
-
-      await tester.tap(_k('console-target-other'));
-      await tester.pump();
-      expect(h.demo.riderLock.value, 'other');
-      expect(find.text('LOCK · SIM'), findsOneWidget);
-      // The selected row shows a lock icon, the other a radio circle.
-      expect(
-          find.descendant(
-              of: _k('console-target-other'),
-              matching: find.byIcon(Icons.lock)),
-          findsOneWidget);
-      expect(
-          find.descendant(
-              of: _k('console-target-rider'),
-              matching: find.byIcon(Icons.radio_button_unchecked)),
-          findsOneWidget);
-
-      await tester.tap(_k('console-clear-lock'));
-      await tester.pump();
-      expect(h.demo.riderLock.value, isNull);
-      expect(find.text('NO LOCK'), findsOneWidget);
-      expect(h.control.commands, isEmpty);
-      await tester.pump(const Duration(seconds: 4));
-    });
-
     testWidgets('Core: no target data, so no lock is offered or claimed',
         (tester) async {
       final h = _Harness(live: true);
@@ -653,7 +623,8 @@ void main() {
       await tester.tap(_k('console-rider-lock'));
       await tester.pump();
       expect(find.textContaining('Not available yet'), findsOneWidget);
-      expect(find.text('Simulated targets — not detections'), findsNothing);
+      expect(find.byKey(const ValueKey('console-rider-note')), findsOneWidget);
+      expect(find.textContaining('PERSON 2'), findsNothing);
       await tester.pump(const Duration(seconds: 4));
     });
 
@@ -720,6 +691,338 @@ void main() {
       c.exitCleanView();
       expect(c.controlsVisible, isTrue);
       await tester.pump(const Duration(seconds: 2));
+    });
+  });
+
+  group('the rider on the video: box, lock and Track Follow', () {
+    DemoRiderTrack loadTrack() =>
+        DemoRiderTrack.parse(File(DemoRiderTrack.assetPath).readAsStringSync());
+
+    /// The console is 960x480 in these tests. The recorded video widget cannot
+    /// play in a unit test, so the shared framing is driven directly with the
+    /// SAME viewport/fit the real video stage would publish (contain).
+    Future<_Harness> startWithTrack(WidgetTester tester,
+        {double seconds = 20, double zoom = 1}) async {
+      final h = _Harness(position: Duration(seconds: seconds.toInt()));
+      await _start(tester, h);
+      h.demo.attachRiderTrack(loadTrack());
+      h.demo.framing.setViewport(const Size(960, 480), FrameFit.contain);
+      h.demo.zoom.setZoom(zoom);
+      h.demo.updatePlaybackPosition(Duration(seconds: seconds.toInt()));
+      h.demo.tick(1 / 60);
+      await tester.pump();
+      return h;
+    }
+
+    Offset riderScreen(_Harness h) {
+      final g = h.demo.framing.geometry!;
+      final t = h.demo.framing.target!;
+      return g.toScreen(Offset(t.box.cx, t.box.cy));
+    }
+
+    testWidgets(
+        'tapping the actual rider box locks the rider; the chip says so',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 2);
+      expect(h.demo.riderLock.isLocked, isFalse);
+      expect(h.demo.boxStyle, RiderBoxStyle.tracking);
+
+      await tester.tapAt(riderScreen(h));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(h.demo.riderLock.value, 'rider');
+      expect(h.demo.boxStyle, RiderBoxStyle.locked);
+      expect(find.text('LOCK · SIM'), findsOneWidget);
+      expect(h.control.commands, isEmpty, reason: 'a Demo lock is local only');
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('tapping outside the rider does not select anything',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 2);
+      final r = riderScreen(h);
+      // Far from the rider box (the opposite side of the screen).
+      await tester.tapAt(Offset(r.dx < 480 ? 900 : 60, 400));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(h.demo.riderLock.isLocked, isFalse);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('the tap area follows the box after the crop pans',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 5, zoom: 3);
+      final before = h.demo.framing.focus;
+      // Let the rider move a long way; the crop follows.
+      h.demo.updatePlaybackPosition(const Duration(seconds: 70));
+      h.demo.tick(1 / 60);
+      await tester.pump();
+      expect(h.demo.framing.focus, isNot(before), reason: 'the crop moved');
+      final after = riderScreen(h);
+      await tester.tapAt(after);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(h.demo.riderLock.isLocked, isTrue);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('the Rider Lock button clears the lock and re-locks the rider',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 2);
+      await tester.tapAt(riderScreen(h));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(h.demo.riderLock.isLocked, isTrue);
+
+      await tester.tap(_k('console-rider-lock'));
+      await tester.pump();
+      expect(h.demo.riderLock.isLocked, isFalse);
+      expect(find.text('TAP RIDER TO LOCK'), findsOneWidget);
+
+      await tester.tap(_k('console-rider-lock'));
+      await tester.pump();
+      expect(h.demo.riderLock.value, 'rider');
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('a coasting box is a last-known position and cannot be locked',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 126, zoom: 1);
+      expect(h.demo.boxStyle, RiderBoxStyle.coasting);
+      await tester.tapAt(riderScreen(h));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(h.demo.riderLock.isLocked, isFalse);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('no target is known after the fall: no box, nothing to lock',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 100, zoom: 1);
+      h.demo.updatePlaybackPosition(const Duration(milliseconds: 129700));
+      h.demo.tick(1 / 60);
+      await tester.pump();
+      expect(h.demo.framing.target, isNull);
+      expect(h.demo.boxStyle, isNull);
+      expect(h.demo.targets.value, isEmpty);
+      await tester.tap(_k('console-rider-lock'));
+      await tester.pump();
+      expect(h.demo.riderLock.isLocked, isFalse);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('there is no fake Person 2 and no separate picker in Demo',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 2);
+      await tester.tap(_k('console-rider-lock'));
+      await tester.pump();
+      expect(find.textContaining('PERSON 2'), findsNothing);
+      expect(find.textContaining('Simulated targets'), findsNothing);
+      expect(_k('console-rider-picker'), findsNothing);
+      expect(h.demo.targets.value.length, 1);
+      expect(h.demo.targets.value.single.id, 'rider');
+      expect(h.demo.targets.value.single.provenance,
+          TargetProvenance.demoAnnotation);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets(
+        'Track Follow uses the rider: presets 2x, 3x, 4x keep them framed',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20);
+      for (final z in [2, 3, 4]) {
+        await tester.tap(_k('console-preset-$z'));
+        await tester.pump();
+        h.demo.tick(1 / 60);
+        await tester.pump();
+        final s = riderScreen(h);
+        expect(s.dx, inInclusiveRange(960 * 0.15, 960 * 0.85),
+            reason: '${z}x x');
+        expect(s.dy, inInclusiveRange(480 * 0.15, 480 * 0.85),
+            reason: '${z}x y');
+        expect(h.demo.zoom.value, z.toDouble());
+      }
+      expect(h.control.commands, isEmpty, reason: 'Demo follow-pan is local');
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('the rider is not lost when pinching', (tester) async {
+      final h = await startWithTrack(tester, seconds: 20);
+      final c = const Offset(480, 240);
+      final a = await tester.startGesture(c - const Offset(20, 0), pointer: 1);
+      final b = await tester.startGesture(c + const Offset(20, 0), pointer: 2);
+      await a.moveTo(c - const Offset(80, 0));
+      await b.moveTo(c + const Offset(80, 0));
+      await tester.pump();
+      h.demo.tick(1 / 60);
+      await tester.pump();
+      expect(h.demo.zoom.value, greaterThan(1.3));
+      final s = riderScreen(h);
+      expect(s.dx, inInclusiveRange(960 * 0.15, 960 * 0.85));
+      expect(h.demo.framing.target, isNotNull);
+      await a.up();
+      await b.up();
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('double-tap returns to the last zoom still framed on the rider',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 3);
+      Future<void> doubleTap() async {
+        // ON the rider: a double-tap toggles zoom and must not lock them.
+        final p = riderScreen(h);
+        await tester.tapAt(p);
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.tapAt(p);
+        await tester.pump(const Duration(milliseconds: 400));
+        h.demo.tick(1 / 60);
+        await tester.pump();
+      }
+
+      await doubleTap();
+      expect(h.demo.zoom.value, 1.0);
+      await doubleTap();
+      expect(h.demo.zoom.value, 3.0);
+      final s = riderScreen(h);
+      expect(s.dx, inInclusiveRange(960 * 0.15, 960 * 0.85));
+      expect(h.demo.riderLock.isLocked, isFalse);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('a timeline seek moves the rider box and crop immediately',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 10, zoom: 3);
+      final before = h.demo.framing.focus;
+      final box = tester.getRect(_k('console-timeline'));
+      await tester.dragFrom(
+          Offset(box.left + 5, box.bottom - 2), Offset(box.width * 0.5, 0));
+      await tester.pump(const Duration(milliseconds: 200));
+      h.demo.tick(1 / 60);
+      await tester.pump();
+      final seekedTo = h.seeks.last;
+      final expected = loadTrack().at(seekedTo)!.box;
+      expect(h.demo.framing.target!.box.cx, closeTo(expected.cx, 0.01));
+      // The crop snapped: the rider is framed, not still panning from before.
+      final s = riderScreen(h);
+      expect(s.dx, inInclusiveRange(960 * 0.15, 960 * 0.85));
+      expect(h.demo.framing.focus, isNot(before));
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('MANUAL: the crop stops following; TRACK FOLLOW reacquires',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 3);
+      await tester.tap(_k('console-mode-manual'));
+      await tester.pump();
+      h.demo.updatePlaybackPosition(const Duration(seconds: 20));
+      h.demo.tick(1 / 60);
+      final held = h.demo.framing.focus;
+      h.demo.updatePlaybackPosition(const Duration(seconds: 80));
+      h.demo.tick(1 / 60);
+      expect(h.demo.framing.focus, held);
+
+      await tester.tap(_k('console-mode-trackFollow'));
+      await tester.pump();
+      h.demo.tick(1 / 60);
+      final t = loadTrack().at(const Duration(seconds: 80))!.box;
+      expect((h.demo.framing.focus.dx - t.cx).abs(), lessThan(0.02));
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('MANUAL: a one-finger drag pans the crop; no Clean View swipe',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 3);
+      await tester.tap(_k('console-mode-manual'));
+      await tester.pump();
+      h.demo.tick(1 / 60);
+      final before = h.demo.framing.focus;
+      await tester.dragFrom(const Offset(480, 200), const Offset(-150, 120));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(h.demo.framing.focus, isNot(before));
+      expect(_opacity(tester, 'console-controls-right'), 1,
+          reason:
+              'a downward drag in MANUAL pans and does not enter Clean View');
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('RAW hides the rider box and does not follow', (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 3);
+      await tester.tap(_k('console-mode-raw'));
+      await tester.pump();
+      h.demo.tick(1 / 60);
+      expect(h.demo.framing.target, isNull);
+      expect(h.demo.boxStyle, isNull);
+      expect(h.demo.framing.focus, const Offset(0.5, 0.5));
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('Clean View keeps the rider indication (it lives on the video)',
+        (tester) async {
+      final h = await startWithTrack(tester, seconds: 20, zoom: 2);
+      await tester.tap(_k('console-clean-view'));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(_opacity(tester, 'console-controls-right'), 0);
+      // The box is drawn by the video stage, which is not part of the faded
+      // controls, and the state that draws it is untouched.
+      expect(h.demo.boxStyle, isNotNull);
+      expect(h.demo.framing.target, isNotNull);
+      expect(find.byType(EptzVideoView), findsOneWidget);
+      expect(
+          find.ancestor(
+              of: find.byType(EptzVideoView),
+              matching: find.byKey(const ValueKey('console-controls-right'))),
+          findsNothing);
+      expect(find.text('DEMO — RECORDED CAMERA FEED'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('the Track state label and the box style agree',
+        (tester) async {
+      final early = await startWithTrack(tester, seconds: 1);
+      expect(early.demo.trackState.value.phase, VisionTrackPhase.acquiring);
+      expect(early.demo.boxStyle, RiderBoxStyle.candidate);
+      await tester.pump(const Duration(seconds: 4));
+    });
+  });
+
+  group('DemoFramedStage: video and rider box share one transform', () {
+    testWidgets('the box is drawn where the transformed rider pixels are',
+        (tester) async {
+      tester.view.physicalSize = const Size(960, 480);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final src = DemoRecordedCameraSource();
+      addTearDown(src.dispose);
+      src.attachRiderTrack(DemoRiderTrack.parse(
+          File(DemoRiderTrack.assetPath).readAsStringSync()));
+      src.zoom.setZoom(3);
+      await tester.pumpWidget(MaterialApp(
+        home: SizedBox.expand(
+          child: DemoFramedStage(
+            source: src,
+            videoSize: const Size(1920, 1080),
+            fit: FrameFit.contain,
+            child: const ColoredBox(color: Colors.teal),
+          ),
+        ),
+      ));
+      await tester.pump();
+      src.updatePlaybackPosition(const Duration(seconds: 40));
+      src.tick(1 / 60);
+      await tester.pump();
+
+      final paint = tester.widget<CustomPaint>(_k('rider-box'));
+      final painter = paint.painter as RiderBoxPainter;
+      final g = src.framing.geometry!;
+      final tform = tester.widget<Transform>(_k('video-transform'));
+      final m = tform.transform;
+      // The rider's centre pixel through the video matrix...
+      final t = src.framing.target!.box;
+      final vx = m.storage[12] + t.cx * 1920 * m.storage[0];
+      final vy = m.storage[13] + t.cy * 1080 * m.storage[5];
+      // ...is the centre of the painted box.
+      expect(painter.rect.center.dx, closeTo(vx, 1e-6));
+      expect(painter.rect.center.dy, closeTo(vy, 1e-6));
+      expect(painter.rect, g.boxToScreen(t));
+      expect(painter.style, RiderBoxStyle.tracking);
     });
   });
 }

@@ -76,6 +76,14 @@ void main() {
     expect(find.byKey(const ValueKey('console-timeline')), findsNothing);
     expect(find.text('LOCK · SIM'), findsNothing);
     expect(find.text('LOCK · N/A'), findsOneWidget);
+    // No Demo spatial data or interaction leaks into Core Mode.
+    expect(find.byKey(const ValueKey('rider-box')), findsNothing);
+    expect(find.text('TAP RIDER TO LOCK'), findsNothing);
+    expect(find.text('RIDER LOCKED'), findsNothing);
+    await tester.tapAt(const Offset(480, 240));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('LOCK · SIM'), findsNothing,
+        reason: 'a tap on the video cannot create a Rider Lock in Core Mode');
     expect(find.byType(SimulatedWakeView), findsNothing);
     // The normal bottom navigation is hidden while the console owns the display.
     expect(find.byType(NavigationBar), findsNothing);
