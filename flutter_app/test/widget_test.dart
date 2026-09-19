@@ -63,7 +63,8 @@ void main() {
     expect(find.text('Not paired'), findsOneWidget);
   });
 
-  testWidgets('Live tab shows the simulated capture screen and link badge',
+  testWidgets(
+      'Live tab shows the recorded Demo feed, enables local media controls, and keeps vessel controls disabled',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pumpAndSettle();
@@ -74,7 +75,28 @@ void main() {
     // Its custom topbar brand text is visible (a styled Text, not a native
     // AppBar — see capture_screen.dart).
     expect(find.text('Connect'), findsOneWidget);
-    expect(find.textContaining('SIMULATED'), findsWidgets);
+    expect(find.text('DEMO — RECORDED CAMERA FEED'), findsOneWidget);
+    expect(find.text('ACQUIRING RIDER'), findsOneWidget);
+    expect(find.text('Recorded demo playback'), findsOneWidget);
+
+    // Local media controls are live in Recorded Demo Mode: digital zoom
+    // responds immediately (it is local state, no Core involved).
+    expect(find.text('1.0×'), findsOneWidget);
+    await tester.tap(find.text('+'));
+    await tester.pump();
+    expect(find.text('1.5×'), findsOneWidget);
+
+    await tester.drag(find.byType(ListView).last, const Offset(0, -520), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    // The old "controls are disabled" wording is superseded.
+    expect(find.textContaining('Snapshot, Highlight, and digital Zoom are simulated locally'),
+        findsOneWidget);
+    expect(find.textContaining('Vessel controls remain disabled'), findsOneWidget);
+    expect(find.textContaining('camera, framing, capture, and vessel controls are disabled'),
+        findsNothing);
+
+    final captureControl = tester.widget<Switch>(find.byType(Switch));
+    expect(captureControl.onChanged, isNull);
   });
 
   testWidgets('Community > Compete opens the hub, King of Wake speed-class validation works live',

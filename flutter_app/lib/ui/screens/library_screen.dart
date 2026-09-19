@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -5,6 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../core/app_config.dart';
 import '../../core/models/clip.dart';
+import '../../core/services/camera_media_source.dart'
+    show DemoRecordedCameraSource;
+import '../../core/services/demo_media.dart';
 import '../../core/services/media_catalog_service.dart';
 import '../../core/services/pairing_service.dart';
 import '../theme/binnacle_theme.dart';
@@ -17,6 +22,13 @@ import '../widgets/glass_sheet.dart';
 /// media_catalog_service.dart for the (unverified, no live Core exists yet)
 /// endpoint contract.
 class ClipRepository extends ChangeNotifier {
+  /// Persists Demo-origin clips across restarts. Null (the default, and always
+  /// in Core Mode) means nothing is persisted here: Core clips come from the
+  /// Core, never from local storage.
+  final DemoLibraryStore? _demoStore;
+
+  ClipRepository({DemoLibraryStore? demoStore}) : _demoStore = demoStore;
+
   final List<Clip> _clips = [];
   List<Clip> get clips => List.unmodifiable(_clips);
 
@@ -73,6 +85,53 @@ class ClipRepository extends ChangeNotifier {
     if (i == -1) return;
     _clips[i] = _clips[i].copyWith(favorite: !_clips[i].favorite);
     notifyListeners();
+    if (_clips[i].isDemoOrigin) _persistDemo();
+  }
+
+  /// Demo-origin clips worth persisting: those the user created locally. The
+  /// seeded showcase clips are regenerated each launch, never stored.
+  List<Clip> get _persistableDemoClips =>
+      _clips.where((c) => c.isDemoOrigin && !c.id.startsWith('seed-')).toList();
+
+  Future<void> _persistDemo() async {
+    final store = _demoStore;
+    if (store == null) return;
+    try {
+      await store.save(_persistableDemoClips);
+    } catch (e) {
+      debugPrint('Demo Library save failed: $e');
+    }
+  }
+
+  /// Restores locally created Demo media. A snapshot whose image file has
+  /// disappeared is dropped rather than shown as a broken card.
+  Future<void> hydrateDemo() async {
+    final store = _demoStore;
+    if (store == null) return;
+    if (!AppConfig.isDemo) return;
+    final saved = await store.load();
+    final restored = <Clip>[
+      for (final c in saved)
+        if (c.origin != ClipOrigin.demoLocalCapture ||
+            (c.localPath != null && File(c.localPath!).existsSync()))
+          c,
+    ]..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+    final known = _clips.map((c) => c.id).toSet();
+    _clips.insertAll(0, restored.where((c) => !known.contains(c.id)));
+    notifyListeners();
+  }
+
+  /// Adds Demo media created locally by a Demo action, and persists it. Only
+  /// valid in Demo Mode; Core media never enters the Library this way.
+  Future<void> addDemoLocalClip(Clip clip) async {
+    if (!AppConfig.isDemo) {
+      throw StateError('Demo media is unavailable in Core mode');
+    }
+    if (!clip.isDemoOrigin) {
+      throw ArgumentError('Only Demo-origin clips can be added here');
+    }
+    add(clip);
+    await _persistDemo();
   }
 
   void assignRider(String clipId, String riderId) {
@@ -92,14 +151,15 @@ class ClipRepository extends ChangeNotifier {
   /// [addFromCapture] for the demo-only bridge that makes the button presses
   /// visible here in the meantime.
   void seedDemo() {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
+    if (!AppConfig.isDemo)
+      throw StateError('Demo media is unavailable in Core mode');
     if (_clips.isNotEmpty) return;
     final now = DateTime.now();
     _clips.addAll([
       Clip(
         id: 'seed-${_seq++}',
-        title: 'Backside 180 into flats',
-        duration: const Duration(seconds: 14),
+        title: 'Wakesurf session — full pass',
+        duration: const Duration(seconds: 130),
         kind: ClipKind.highlight,
         riderId: 'levi',
         favorite: true,
@@ -109,7 +169,12 @@ class ClipRepository extends ChangeNotifier {
         // demo data: this is not Core-backed media (see Clip.mediaUrl's
         // doc comment) and mediaUrl for a real clip only ever comes from
         // HttpMediaCatalogService's real Core fetch.
-        mediaUrl: 'assets/demo/gopro_dev_footage.mp4',
+        origin: ClipOrigin.demoSegment,
+        segment: MediaSegment(
+          assetPath: DemoRecordedCameraSource.defaultAssetPath,
+          start: Duration.zero,
+          end: Duration(seconds: 130),
+        ),
       ),
       Clip(
         id: 'seed-${_seq++}',
@@ -151,11 +216,14 @@ class ClipRepository extends ChangeNotifier {
   /// to something visible here — see [seedDemo] docs above for why this
   /// exists instead of a real Core-backed clip feed.
   void addFromCapture({required ClipKind kind, required String preset}) {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
+    if (!AppConfig.isDemo)
+      throw StateError('Demo media is unavailable in Core mode');
     add(Clip(
       id: 'live-${_seq++}',
-      title: kind == ClipKind.photo ? 'Snapshot — $preset' : 'Highlight — $preset',
-      duration: kind == ClipKind.photo ? Duration.zero : const Duration(seconds: 12),
+      title:
+          kind == ClipKind.photo ? 'Snapshot — $preset' : 'Highlight — $preset',
+      duration:
+          kind == ClipKind.photo ? Duration.zero : const Duration(seconds: 12),
       kind: kind,
       riderId: 'levi',
       capturedAt: DateTime.now(),
@@ -170,7 +238,8 @@ class ClipRepository extends ChangeNotifier {
   /// checkbox. Returns the created clip so the caller can submit it
   /// immediately.
   Clip importFallClip() {
-    if (!AppConfig.isDemo) throw StateError('Demo media is unavailable in Core mode');
+    if (!AppConfig.isDemo)
+      throw StateError('Demo media is unavailable in Core mode');
     final clip = Clip(
       id: 'import-${_seq++}',
       title: 'Imported fall clip',
@@ -193,7 +262,8 @@ const _cardPalettes = [
   [Color(0xFF2A3A2C), Color(0xFF14201A)],
 ];
 
-List<Color> _paletteFor(String id) => _cardPalettes[id.hashCode.abs() % _cardPalettes.length];
+List<Color> _paletteFor(String id) =>
+    _cardPalettes[id.hashCode.abs() % _cardPalettes.length];
 
 class LibraryScreen extends StatefulWidget {
   final ClipRepository repository;
@@ -203,7 +273,8 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
-class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProviderStateMixin {
+class _LibraryScreenState extends State<LibraryScreen>
+    with SingleTickerProviderStateMixin {
   ClipKind? _filter;
   late final AnimationController _sheen = AnimationController(
     vsync: this,
@@ -236,9 +307,11 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
       animation: widget.repository,
       builder: (context, _) {
         final all = widget.repository.clips;
-        final clips = all.where((c) => _filter == null || c.kind == _filter).toList();
+        final clips =
+            all.where((c) => _filter == null || c.kind == _filter).toList();
         final hero = _filter == null && all.isNotEmpty ? all.first : null;
-        final rest = hero == null ? clips : clips.where((c) => c.id != hero.id).toList();
+        final rest =
+            hero == null ? clips : clips.where((c) => c.id != hero.id).toList();
 
         return Scaffold(
           body: SafeArea(
@@ -250,22 +323,32 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text('Library', style: Theme.of(context).textTheme.titleLarge),
+                            Text('Library',
+                                style: Theme.of(context).textTheme.titleLarge),
                           ],
                         ),
                       ),
-                      _FilterRow(current: _filter, onChanged: (f) => setState(() => _filter = f)),
+                      _FilterRow(
+                          current: _filter,
+                          onChanged: (f) => setState(() => _filter = f)),
                       Expanded(
                         child: !AppConfig.isDemo && widget.repository.loading
                             ? const Center(child: CircularProgressIndicator())
-                            : !AppConfig.isDemo && widget.repository.loadError != null
+                            : !AppConfig.isDemo &&
+                                    widget.repository.loadError != null
                                 ? _CatalogErrorState(
                                     message: widget.repository.loadError!,
-                                    onRetry: () => widget.repository.retryLoadFromCore(
+                                    onRetry: () =>
+                                        widget.repository.retryLoadFromCore(
                                       HttpMediaCatalogService(),
-                                      context.read<PairingService>().credential!.deviceId,
-                                      bearerToken:
-                                          context.read<PairingService>().credential!.bearerToken!,
+                                      context
+                                          .read<PairingService>()
+                                          .credential!
+                                          .deviceId,
+                                      bearerToken: context
+                                          .read<PairingService>()
+                                          .credential!
+                                          .bearerToken!,
                                     ),
                                   )
                                 : const _EmptyState(),
@@ -277,11 +360,14 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
                         sliver: SliverToBoxAdapter(
-                          child: Text('Library', style: Theme.of(context).textTheme.titleLarge),
+                          child: Text('Library',
+                              style: Theme.of(context).textTheme.titleLarge),
                         ),
                       ),
                       SliverToBoxAdapter(
-                        child: _FilterRow(current: _filter, onChanged: (f) => setState(() => _filter = f)),
+                        child: _FilterRow(
+                            current: _filter,
+                            onChanged: (f) => setState(() => _filter = f)),
                       ),
                       if (hero != null)
                         SliverPadding(
@@ -293,7 +379,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                                 clip: hero,
                                 sheenT: _sheen.value,
                                 onTap: () => _openClip(context, hero),
-                                onFavorite: () => widget.repository.toggleFavorite(hero.id),
+                                onFavorite: () =>
+                                    widget.repository.toggleFavorite(hero.id),
                               ),
                             ),
                           ),
@@ -301,7 +388,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(18, 6, 18, 24),
                         sliver: SliverGrid(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 2,
                             mainAxisSpacing: 10,
                             crossAxisSpacing: 10,
@@ -315,7 +403,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                                 sheenT: _sheen.value,
                                 phase: i * 0.37,
                                 onTap: () => _openClip(context, rest[i]),
-                                onFavorite: () => widget.repository.toggleFavorite(rest[i].id),
+                                onFavorite: () => widget.repository
+                                    .toggleFavorite(rest[i].id),
                               ),
                             ),
                             childCount: rest.length,
@@ -333,7 +422,8 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
   void _openClip(BuildContext context, Clip clip) {
     showGlassBottomSheet(
       context: context,
-      builder: (_) => _ClipDetailSheet(clip: clip, repository: widget.repository),
+      builder: (_) =>
+          _ClipDetailSheet(clip: clip, repository: widget.repository),
     );
   }
 }
@@ -354,37 +444,77 @@ class _ClipDetailSheet extends StatefulWidget {
 class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   VideoPlayerController? _player;
   String? _playerError;
+  bool _segmentFinished = false;
 
-  bool get _hasRealMedia => widget.clip.mediaUrl != null && widget.clip.kind != ClipKind.photo;
+  MediaSegment? get _segment => widget.clip.segment;
 
-  /// Download/share only make sense for a real Core-hosted link — a bundled
-  /// demo asset (a local `assets/...` path, see seedDemo()) is genuinely
-  /// playable but isn't a URL `url_launcher`/`share_plus` can do anything
-  /// useful with.
-  bool get _isRemoteMedia => _hasRealMedia && !widget.clip.mediaUrl!.startsWith('assets/');
+  bool get _hasRealMedia =>
+      (widget.clip.mediaUrl != null || _segment != null) &&
+      widget.clip.kind != ClipKind.photo;
+
+  /// Download/share only make sense for a real Core-hosted link. A demo
+  /// segment or local image is genuinely playable/viewable but has no URL.
+  bool get _isRemoteMedia => widget.clip.mediaUrl != null;
 
   @override
   void dispose() {
+    _player?.removeListener(_enforceSegmentEnd);
     _player?.dispose();
     super.dispose();
   }
 
+  /// A demo highlight is a reference into the bundled source, so playback must
+  /// stop at the saved end point instead of running to the end of the source.
+  void _enforceSegmentEnd() {
+    final seg = _segment;
+    final player = _player;
+    if (seg == null || player == null || !player.value.isInitialized) return;
+    if (player.value.position >= seg.end && !_segmentFinished) {
+      _segmentFinished = true;
+      player.pause();
+      player.seekTo(seg.start);
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _togglePlayback() async {
+    final player = _player;
+    if (player == null || !player.value.isInitialized) return;
+    if (player.value.isPlaying) {
+      await player.pause();
+    } else {
+      final seg = _segment;
+      if (seg != null && _segmentFinished) {
+        _segmentFinished = false;
+        await player.seekTo(seg.start);
+      }
+      await player.play();
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _play() async {
+    final seg = _segment;
     final url = widget.clip.mediaUrl;
-    if (url == null) return;
-    // A bundled demo asset (see seedDemo()) is a local path, not an http(s)
-    // URL — a real Core-backed clip's mediaUrl always comes from
-    // HttpMediaCatalogService and is always http(s).
-    final controller = url.startsWith('assets/')
-        ? VideoPlayerController.asset(url)
-        : VideoPlayerController.networkUrl(Uri.parse(url));
+    if (seg == null && url == null) return;
+    // A demo segment plays the bundled asset from its saved start point; a
+    // real Core-backed clip's mediaUrl always comes from HttpMediaCatalogService
+    // and is always http(s).
+    final controller = seg != null
+        ? VideoPlayerController.asset(seg.assetPath)
+        : VideoPlayerController.networkUrl(Uri.parse(url!));
     setState(() => _player = controller);
     try {
       await controller.initialize();
+      if (seg != null) {
+        await controller.seekTo(seg.start);
+        controller.addListener(_enforceSegmentEnd);
+      }
       await controller.play();
       if (mounted) setState(() {});
     } catch (e) {
-      if (mounted) setState(() => _playerError = 'Could not play this clip: $e');
+      if (mounted)
+        setState(() => _playerError = 'Could not play this clip: $e');
     }
   }
 
@@ -397,12 +527,25 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_player != null && _player!.value.isInitialized)
+          if (clip.localPath != null && File(clip.localPath!).existsSync())
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.file(File(clip.localPath!),
+                  fit: BoxFit.contain, gaplessPlayback: true),
+            ),
+          if (_player != null && _player!.value.isInitialized) ...[
             AspectRatio(
               aspectRatio: _player!.value.aspectRatio,
               child: VideoPlayer(_player!),
-            )
-          else if (_hasRealMedia)
+            ),
+            if (_segment != null)
+              _SegmentControls(
+                segment: _segment!,
+                position: _player!.value.position,
+                playing: _player!.value.isPlaying,
+                onToggle: _togglePlayback,
+              ),
+          ] else if (_hasRealMedia)
             SizedBox(
               height: 44,
               child: OutlinedButton.icon(
@@ -414,42 +557,60 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
           if (_playerError != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(_playerError!, style: const TextStyle(color: BinnacleColors.amber, fontSize: 12)),
+              child: Text(_playerError!,
+                  style: const TextStyle(
+                      color: BinnacleColors.amber, fontSize: 12)),
             ),
           const SizedBox(height: 10),
           Text(clip.title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),
-          Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}', style: BinnacleTheme.mono(size: 11)),
+          Text('${clip.duration.inSeconds}s · captured ${clip.capturedAt}',
+              style: BinnacleTheme.mono(size: 11)),
           const SizedBox(height: 10),
-          if (clip.signed && clip.gpsAttached)
+          if (clip.isDemoOrigin)
+            _DemoProvenance(clip: clip)
+          else if (clip.signed && clip.gpsAttached)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: BinnacleColors.tealBright.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: BinnacleColors.tealBright.withValues(alpha: 0.3)),
+                border: Border.all(
+                    color: BinnacleColors.tealBright.withValues(alpha: 0.3)),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.verified_outlined, size: 14, color: BinnacleColors.tealBright),
+                const Icon(Icons.verified_outlined,
+                    size: 14, color: BinnacleColors.tealBright),
                 const SizedBox(width: 6),
-                Text('Signed on Vision · GPS attached', style: BinnacleTheme.mono(size: 10, color: BinnacleColors.tealBright)),
+                Text('Signed on Vision · GPS attached',
+                    style: BinnacleTheme.mono(
+                        size: 10, color: BinnacleColors.tealBright)),
               ]),
             ),
-          if (!_hasRealMedia)
+          if (clip.localPath != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Text(
+                'Real frame from the recorded demo feed, saved on this phone.',
+                style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
+              ),
+            )
+          else if (!_hasRealMedia)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Text(
                 AppConfig.isDemo
                     ? 'Demo clip — no real media to download or share.'
                     : 'No media available for this clip yet.',
-                style: const TextStyle(color: BinnacleColors.slate, fontSize: 12),
+                style:
+                    const TextStyle(color: BinnacleColors.slate, fontSize: 12),
               ),
             )
           else if (!_isRemoteMedia)
             const Padding(
               padding: EdgeInsets.only(top: 10),
               child: Text(
-                'Bundled demo footage — plays locally; not downloadable or shareable as a link.',
+                'Recorded demo footage — plays locally from the bundled demo asset; not downloadable or shareable as a link.',
                 style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
               ),
             ),
@@ -458,7 +619,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: () => widget.repository.toggleFavorite(clip.id),
-                icon: Icon(clip.favorite ? Icons.favorite : Icons.favorite_border),
+                icon: Icon(
+                    clip.favorite ? Icons.favorite : Icons.favorite_border),
                 label: Text(clip.favorite ? 'Favorited' : 'Favorite'),
               ),
             ),
@@ -467,7 +629,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
               tooltip: 'Download',
               onPressed: !_isRemoteMedia
                   ? null
-                  : () => launchUrl(Uri.parse(clip.mediaUrl!), mode: LaunchMode.externalApplication),
+                  : () => launchUrl(Uri.parse(clip.mediaUrl!),
+                      mode: LaunchMode.externalApplication),
               icon: const Icon(Icons.download_outlined),
             ),
             IconButton(
@@ -501,9 +664,14 @@ class _FilterRow extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
             decoration: BoxDecoration(
-              color: on ? BinnacleColors.teal.withValues(alpha: 0.1) : BinnacleColors.navy,
+              color: on
+                  ? BinnacleColors.teal.withValues(alpha: 0.1)
+                  : BinnacleColors.navy,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: on ? BinnacleColors.teal : BinnacleColors.offWhite.withValues(alpha: 0.09)),
+              border: Border.all(
+                  color: on
+                      ? BinnacleColors.teal
+                      : BinnacleColors.offWhite.withValues(alpha: 0.09)),
             ),
             child: Text(
               label,
@@ -565,6 +733,113 @@ class _Sheen extends StatelessWidget {
   }
 }
 
+/// Path of a real local image for this clip, or null. Synchronous existence
+/// check so a missing file falls back to the gradient instead of a broken card.
+String? _localImagePath(Clip c) {
+  final path = c.localPath ?? c.thumbnailPath;
+  if (path == null || path.startsWith('http')) return null;
+  return File(path).existsSync() ? path : null;
+}
+
+/// The clip's real image (a captured frame) under the card chrome.
+class _ClipArtwork extends StatelessWidget {
+  final Clip clip;
+  const _ClipArtwork({required this.clip});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = _localImagePath(clip);
+    if (path == null) return const SizedBox.shrink();
+    return Image.file(
+      File(path),
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+    );
+  }
+}
+
+/// Marks media that came from the recorded Demo, never from Core/Vision.
+class _DemoBadge extends StatelessWidget {
+  const _DemoBadge();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: BinnacleColors.navyDeep.withValues(alpha: 0.78),
+          borderRadius: BorderRadius.circular(6),
+          border:
+              Border.all(color: BinnacleColors.amber.withValues(alpha: 0.8)),
+        ),
+        child: Text('DEMO',
+            style: BinnacleTheme.mono(
+                size: 8.5,
+                color: BinnacleColors.amber,
+                weight: FontWeight.w700)),
+      );
+}
+
+class _DemoProvenance extends StatelessWidget {
+  final Clip clip;
+  const _DemoProvenance({required this.clip});
+
+  @override
+  Widget build(BuildContext context) {
+    final seg = clip.segment;
+    final where = seg == null
+        ? 'frame of the recorded demo feed'
+        : 'segment ${formatDemoTime(seg.start)}–${formatDemoTime(seg.end)} of the recorded demo feed';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: BinnacleColors.amber.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: BinnacleColors.amber.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        'DEMO — $where. Simulated locally; not captured by Core or Vision.',
+        style: BinnacleTheme.mono(size: 10, color: BinnacleColors.amber),
+      ),
+    );
+  }
+}
+
+/// Play/pause and a position readout relative to the saved segment, so the
+/// start and stop points are visible.
+class _SegmentControls extends StatelessWidget {
+  final MediaSegment segment;
+  final Duration position;
+  final bool playing;
+  final VoidCallback onToggle;
+  const _SegmentControls({
+    required this.segment,
+    required this.position,
+    required this.playing,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    var rel = position - segment.start;
+    if (rel < Duration.zero) rel = Duration.zero;
+    if (rel > segment.length) rel = segment.length;
+    return Row(children: [
+      IconButton(
+        tooltip: playing ? 'Pause' : 'Play',
+        onPressed: onToggle,
+        icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+      ),
+      Text('${formatDemoTime(rel)} / ${formatDemoTime(segment.length)}',
+          style: BinnacleTheme.mono(size: 11)),
+      const Spacer(),
+      Text(
+          'source ${formatDemoTime(segment.start)}–${formatDemoTime(segment.end)}',
+          style: BinnacleTheme.mono(size: 10, color: BinnacleColors.slate)),
+    ]);
+  }
+}
+
 class _KindBadge extends StatelessWidget {
   final ClipKind kind;
   const _KindBadge({required this.kind});
@@ -578,8 +853,14 @@ class _KindBadge extends StatelessWidget {
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.92), borderRadius: BorderRadius.circular(6)),
-      child: Text(label, style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.navyDeep, weight: FontWeight.w700)),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(6)),
+      child: Text(label,
+          style: BinnacleTheme.mono(
+              size: 8.5,
+              color: BinnacleColors.navyDeep,
+              weight: FontWeight.w700)),
     );
   }
 }
@@ -592,7 +873,11 @@ class _HeroClipCard extends StatelessWidget {
   final double sheenT;
   final VoidCallback onTap;
   final VoidCallback onFavorite;
-  const _HeroClipCard({required this.clip, required this.sheenT, required this.onTap, required this.onFavorite});
+  const _HeroClipCard(
+      {required this.clip,
+      required this.sheenT,
+      required this.onTap,
+      required this.onFavorite});
 
   @override
   Widget build(BuildContext context) {
@@ -608,33 +893,49 @@ class _HeroClipCard extends StatelessWidget {
             children: [
               DecoratedBox(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: palette),
+                  gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: palette),
                 ),
               ),
+              _ClipArtwork(clip: clip),
               _Sheen(t: sheenT),
-              const Center(
-                child: Icon(Icons.play_circle_fill, color: Colors.white70, size: 46),
-              ),
+              if (clip.kind != ClipKind.photo)
+                const Center(
+                  child: Icon(Icons.play_circle_fill,
+                      color: Colors.white70, size: 46),
+                ),
               Positioned(
                 top: 10,
                 left: 10,
                 child: Row(children: [
                   _KindBadge(kind: clip.kind),
+                  if (clip.isDemoOrigin) ...[
+                    const SizedBox(width: 6),
+                    const _DemoBadge(),
+                  ],
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
                       color: BinnacleColors.navyDeep.withValues(alpha: 0.6),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text('LATEST', style: BinnacleTheme.mono(size: 8.5, color: BinnacleColors.tealBright, weight: FontWeight.w700)),
+                    child: Text('LATEST',
+                        style: BinnacleTheme.mono(
+                            size: 8.5,
+                            color: BinnacleColors.tealBright,
+                            weight: FontWeight.w700)),
                   ),
                 ]),
               ),
               Positioned(
                 top: 8,
                 right: 8,
-                child: _FavoriteButton(favorite: clip.favorite, onTap: onFavorite),
+                child:
+                    _FavoriteButton(favorite: clip.favorite, onTap: onFavorite),
               ),
               Positioned(
                 left: 0,
@@ -646,7 +947,10 @@ class _HeroClipCard extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, BinnacleColors.navyDeep.withValues(alpha: 0.88)],
+                      colors: [
+                        Colors.transparent,
+                        BinnacleColors.navyDeep.withValues(alpha: 0.88)
+                      ],
                     ),
                   ),
                   child: Column(
@@ -656,11 +960,18 @@ class _HeroClipCard extends StatelessWidget {
                       Text(clip.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
+                          style: const TextStyle(
+                              fontFamily: 'Space Grotesk',
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              color: Colors.white)),
                       const SizedBox(height: 3),
                       Text(
-                        clip.duration == Duration.zero ? _timeAgo(clip.capturedAt) : '${clip.duration.inSeconds}s · ${_timeAgo(clip.capturedAt)}',
-                        style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.slate),
+                        clip.duration == Duration.zero
+                            ? _timeAgo(clip.capturedAt)
+                            : '${clip.duration.inSeconds}s · ${_timeAgo(clip.capturedAt)}',
+                        style: BinnacleTheme.mono(
+                            size: 10.5, color: BinnacleColors.slate),
                       ),
                     ],
                   ),
@@ -700,14 +1011,33 @@ class _ClipCard extends StatelessWidget {
           children: [
             DecoratedBox(
               decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: palette),
+                gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: palette),
               ),
             ),
+            _ClipArtwork(clip: clip),
             _Sheen(t: sheenT, phase: phase),
             if (clip.kind != ClipKind.photo)
-              const Center(child: Icon(Icons.play_arrow_rounded, color: Colors.white54, size: 30)),
-            Positioned(top: 6, left: 6, child: _KindBadge(kind: clip.kind)),
-            Positioned(top: 4, right: 4, child: _FavoriteButton(favorite: clip.favorite, onTap: onFavorite, small: true)),
+              const Center(
+                  child: Icon(Icons.play_arrow_rounded,
+                      color: Colors.white54, size: 30)),
+            Positioned(
+                top: 6,
+                left: 6,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _KindBadge(kind: clip.kind),
+                  if (clip.isDemoOrigin) ...[
+                    const SizedBox(width: 4),
+                    const _DemoBadge(),
+                  ],
+                ])),
+            Positioned(
+                top: 4,
+                right: 4,
+                child: _FavoriteButton(
+                    favorite: clip.favorite, onTap: onFavorite, small: true)),
             Positioned(
               left: 0,
               right: 0,
@@ -718,7 +1048,10 @@ class _ClipCard extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, BinnacleColors.navyDeep.withValues(alpha: 0.9)],
+                    colors: [
+                      Colors.transparent,
+                      BinnacleColors.navyDeep.withValues(alpha: 0.9)
+                    ],
                   ),
                 ),
                 child: Column(
@@ -728,11 +1061,17 @@ class _ClipCard extends StatelessWidget {
                     Text(clip.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11.5, color: Colors.white)),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11.5,
+                            color: Colors.white)),
                     const SizedBox(height: 2),
                     Text(
-                      clip.duration == Duration.zero ? _timeAgo(clip.capturedAt) : '${clip.duration.inSeconds}s',
-                      style: BinnacleTheme.mono(size: 9, color: BinnacleColors.slate),
+                      clip.duration == Duration.zero
+                          ? _timeAgo(clip.capturedAt)
+                          : '${clip.duration.inSeconds}s',
+                      style: BinnacleTheme.mono(
+                          size: 9, color: BinnacleColors.slate),
                     ),
                   ],
                 ),
@@ -749,7 +1088,8 @@ class _FavoriteButton extends StatelessWidget {
   final bool favorite;
   final VoidCallback onTap;
   final bool small;
-  const _FavoriteButton({required this.favorite, required this.onTap, this.small = false});
+  const _FavoriteButton(
+      {required this.favorite, required this.onTap, this.small = false});
 
   @override
   Widget build(BuildContext context) {
@@ -766,7 +1106,8 @@ class _FavoriteButton extends StatelessWidget {
         ),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+          transitionBuilder: (child, anim) =>
+              ScaleTransition(scale: anim, child: child),
           child: Icon(
             favorite ? Icons.favorite : Icons.favorite_border,
             key: ValueKey(favorite),
@@ -793,7 +1134,8 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) => const BinnacleEmptyState(
         icon: Icons.video_camera_back_outlined,
         title: 'No clips yet',
-        subtitle: 'Hit the water and press Save Highlight —\nyour best pass shows up here first.',
+        subtitle:
+            'Hit the water and press Save Highlight —\nyour best pass shows up here first.',
         accent: BinnacleColors.tealBright,
       );
 }
@@ -813,12 +1155,18 @@ class _CatalogErrorState extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_off, color: BinnacleColors.amber, size: 40),
+              const Icon(Icons.cloud_off,
+                  color: BinnacleColors.amber, size: 40),
               const SizedBox(height: 12),
               const Text("Couldn't load clips from Core",
-                  style: TextStyle(fontFamily: 'Space Grotesk', fontWeight: FontWeight.w700, fontSize: 16)),
+                  style: TextStyle(
+                      fontFamily: 'Space Grotesk',
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16)),
               const SizedBox(height: 6),
-              Text(message, textAlign: TextAlign.center, style: const TextStyle(color: BinnacleColors.slate)),
+              Text(message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: BinnacleColors.slate)),
               const SizedBox(height: 16),
               OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
             ],
