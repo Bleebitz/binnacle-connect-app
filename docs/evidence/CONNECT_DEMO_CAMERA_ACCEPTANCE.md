@@ -282,7 +282,7 @@ Evidence files: `01_live_1.0x.png`, `02_live_2.0x.png`,
   step, which is not implemented.
 - **Snapshot latency.** The toast appears after the frame is decoded, typically
   under about a second; the source has a keyframe roughly every 8.3 s.
-- **Accumulation.** There is no delete for demo media. Testing left about ten
+- **Accumulation.** *(Superseded by the 2026-09-18 deletion addendum below.)* There was no delete for demo media. Testing left about ten
   Demo items in the phone's Library and two project-owned demo frames in
   `Pictures/Binnacle/`; the gallery copies remain after uninstall.
 - **Android only.** Frame extraction is a platform channel; other platforms show
@@ -319,3 +319,113 @@ gesture was captured, and the exact zoom levels reached were not recorded.
   and audit self-test, debug and release APK builds (run 35399915406).
 - Scope: this verifies the Connect Demo's local pinch-to-zoom of the recorded
   feed only. It is not evidence of real Vision/Core physical ePTZ.
+
+### Addendum — 2026-09-18: safe deletion of local Snapshots and Highlights
+
+**Discovered in review.** Levi found on the Samsung Galaxy S25 Ultra that saved
+Highlights and Snapshot pictures in the Connect Library could not be deleted. The
+missing delete had been listed above as a known limitation ("no delete for demo
+media"); it is now a fixed review finding, with the original limitation text kept
+as history.
+
+**Root cause (confirmed in code).** `ClipRepository` only had add, hydrate,
+favorite and persist operations, and the Library detail sheet offered Favorite,
+Download and Share only. There was no remove operation, no persisted-metadata
+removal, and no owned-file cleanup. The device was not at fault.
+
+**Semantics.** *Delete from Binnacle*, for a user-created Demo Snapshot or
+Highlight:
+
+| Item | Removes | Never touches |
+|---|---|---|
+| Snapshot (`demoLocalCapture`) | the Library record, its persisted metadata, and Binnacle's own JPEG (`demo_media/snapshot_*.jpg`; `localPath` and `thumbnailPath` are normally the same file and are deduplicated) | the copy the Snapshot exported to the phone's Gallery (`Pictures/Binnacle/`), which **may remain** and is *not* an orphan bug |
+| Highlight (`demoSegment`) | the Library record, its persisted metadata, and its generated `_thumb.jpg` if any | the bundled `assets/demo/gopro_dev_footage.mp4` (a Highlight is only a reference into it) |
+
+- **Confirmation** (the destructive action is never one tap): "Delete snapshot?"
+  / "This removes the snapshot from Binnacle and deletes its local Binnacle copy.
+  A copy saved to your phone's Gallery may remain." and "Delete highlight?" /
+  "This removes the saved Highlight from your Binnacle Library. The recorded Demo
+  source footage will not be deleted." Buttons Cancel / Delete. Success closes the
+  sheet and shows "Snapshot deleted" / "Highlight deleted"; failure shows
+  "Couldn't delete this item. Try again." and keeps the item.
+- **Safe file deletion.** All deletion goes through `DemoMediaStorage`
+  (`lib/core/services/demo_media.dart`), which only ever deletes a *regular file
+  strictly inside* the app's `demo_media` directory. It refuses paths outside it,
+  `..` traversal, the directory itself, sibling directories that share a prefix,
+  directories and symlinks, and the bundled asset key. Persisted metadata is
+  treated as untrusted. A missing file is not an error.
+- **Repository API.** `ClipRepository.deleteClip(id)` returns a
+  `DeleteClipResult` (`deleted`, `deletedCleanupIncomplete`, `notFound`,
+  `notDeletable`, `persistenceFailed`). It persists the removal *first*: if that
+  fails the item is put back, no file is touched, and the UI says so. If the
+  record is gone but an owned file could not be deleted, the item stays deleted
+  and the orphan is reported (logged), not restored. The same call is what a future
+  bulk delete would use.
+- **Protected items.** Built-in `seed-*` showcase clips are not deletable (they
+  regenerate on every launch); their sheet says why. **Core clips are not
+  deletable**: no authoritative Core delete contract exists, and hiding one
+  locally while implying it was deleted would be dishonest. Demo deletion is not
+  evidence of real Core/Vision media deletion.
+- **Also fixed.** The Library detail sheet had a hidden height cap (9/16 of the
+  screen) and no scrolling, which could clip the bottom action row. It now takes
+  the height it needs and scrolls on short screens.
+- **Future.** "Delete from device too" would need the Snapshot's MediaStore URI to
+  be persisted on the clip and deleted through a MediaStore request; it is not
+  implemented and no storage permission was added (still no
+  `MANAGE_EXTERNAL_STORAGE`).
+
+**Automated tests.** `dart analyze` (CI command): exit 0, 0 errors, 0 warnings
+(58 infos, existing style). `flutter test`: **187 passed, 3 skipped**. New:
+`test/demo_media_delete_test.dart` (19: path safety, dedup, missing files, `..`
+traversal, prefix siblings, directories, bundled asset never deleted, delete
+Snapshot/Highlight, restart does not resurrect, unknown id, seed protection, Core
+clip protection, persistence failure with order preserved, cleanup failure,
+corrupt metadata, no gallery-delete call) and `test/library_delete_ui_test.dart`
+(8: Delete shown for Snapshot/Highlight, hidden for Core, built-in note, exact
+dialog wording, Cancel, confirm closes the sheet and removes the card, hero
+promotion, failure message). Core-mode regression run, audit and audit self-test
+pass.
+
+**Samsung Galaxy S25 Ultra (SM-S938U), observed.** In-place `adb install -r`,
+`versionCode` 2015 → **2016**, no uninstall, no data clear. APK
+`flutter_app/build/app/outputs/flutter-apk/app-release.apk` (190,782,920 bytes),
+SHA-256 `5c322c152cd03c9fd46ac9fdd4c9fd5f56f0eed9294ca7826738a25b2b102783`; the
+APK installed on the phone hashes identically. Screenshots:
+`docs/evidence/media-delete/`.
+
+| Step | Observed |
+|---|---|
+| Create a Snapshot and a Highlight on Live, both appear in the Library | Yes (`01`) |
+| Snapshot detail shows a separated trash icon | Yes (`02`) |
+| Confirmation dialog with the Gallery-copy wording | Yes (`03`) |
+| Cancel keeps the item | Yes (the sheet and item remained) |
+| Delete: sheet closes, card gone, "Snapshot deleted" | Yes (`04`) |
+| Highlight plays, then Delete asks with the source-footage wording | Yes (`05`, `06`) |
+| Highlight card disappears; the next item becomes the hero | Yes |
+| Force-stop and relaunch: neither deleted item returns | Yes (`07`) |
+| Demo feed still plays after deletions (frame difference measured), +/− zoom, Snapshot and Highlight still work | Yes |
+| Crash / ANR | None seen |
+
+**File-level check (diagnostic build).** A release build is not debuggable, so
+the app-owned folder cannot be read on it. For this one check I installed a
+*debug build of the same source* over the app (same package, data kept), ran a
+controlled before/after with `adb shell run-as`, then reinstalled the release
+build. `app_flutter/demo_media` held 20 files; after creating one Snapshot and one
+Highlight it held 22 (`snapshot_*.jpg` and `highlight_*_thumb.jpg` added); after
+deleting both through the UI it held 20 files again, **identical to the first
+listing** (`docs/evidence/media-delete/demo_media_listing.txt`). The earlier
+delete of Snapshot `0:14` had likewise left no `17:53` file behind. The bundled
+demo footage kept playing.
+
+**Gallery copy.** The exported copies of deleted Snapshots are still in
+`Pictures/Binnacle/` (checked with a MediaStore query, for example
+`Binnacle_Demo_1789775862817596.jpg`, the Snapshot deleted in the controlled
+check). This is the approved behaviour and is stated in the dialog.
+
+**Not verified.** Deleting while a Highlight is playing in the same sheet was not
+attempted; the Highlight was deleted from a freshly opened sheet. Very large
+Libraries, low storage and TalkBack were not tested. Pinch zoom was accepted by
+hand earlier (see above) and not re-tested here. The two non-reproduced
+observations recorded earlier (an extra Highlight save, one brief frozen video)
+did not recur, and are still not resolved.
+

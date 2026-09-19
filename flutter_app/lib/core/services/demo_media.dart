@@ -222,6 +222,112 @@ class DemoSnapshotResult {
   const DemoSnapshotResult(this.clip, this.galleryUri);
 }
 
+/// What a cleanup pass did. Only [failed] means Binnacle-owned bytes may still
+/// be on disk; [refused] paths were never ours to delete.
+class DemoCleanupResult {
+  final List<String> deleted;
+  final List<String> alreadyMissing;
+  final List<String> refused;
+  final List<String> failed;
+  const DemoCleanupResult({
+    this.deleted = const [],
+    this.alreadyMissing = const [],
+    this.refused = const [],
+    this.failed = const [],
+  });
+}
+
+/// The one place that knows which files Binnacle owns for Demo media (the
+/// `demo_media` directory under the app documents directory) and the only code
+/// allowed to delete them.
+///
+/// It refuses everything else: paths outside that directory, `..` traversal,
+/// the directory itself, symlinks, sibling directories that merely share a
+/// prefix, and non-files. Persisted metadata is untrusted input, so a corrupt
+/// or malicious `localPath` can never turn into an arbitrary file delete. The
+/// bundled recorded Demo asset is a Flutter asset key, not a file path, and is
+/// therefore never deletable here.
+///
+/// Deleting the phone-Gallery copy of a Snapshot (a MediaStore row) is
+/// deliberately out of scope; see docs/evidence/CONNECT_DEMO_CAMERA_ACCEPTANCE.md.
+class DemoMediaStorage {
+  final Future<Directory> Function() _directory;
+
+  DemoMediaStorage({Future<Directory> Function()? directory})
+      : _directory = directory ?? defaultDirectory;
+
+  static Future<Directory> defaultDirectory() async {
+    final docs = await getApplicationDocumentsDirectory();
+    return Directory('${docs.path}/demo_media').create(recursive: true);
+  }
+
+  static String _canonical(String path, {required bool isDirectory}) {
+    var p = File(path).absolute.path;
+    try {
+      final type = FileSystemEntity.typeSync(p, followLinks: false);
+      if (type != FileSystemEntityType.notFound) {
+        p = isDirectory
+            ? Directory(p).resolveSymbolicLinksSync()
+            : File(p).parent.resolveSymbolicLinksSync() +
+                Platform.pathSeparator +
+                p.split(RegExp(r'[\\/]')).last;
+      }
+    } catch (_) {
+      // Fall through to the lexically normalized form.
+    }
+    return Uri.file(p, windows: Platform.isWindows)
+        .normalizePath()
+        .toFilePath(windows: Platform.isWindows);
+  }
+
+  /// True only for a regular file strictly inside the owned directory.
+  Future<bool> isOwned(String? path) async {
+    if (path == null || path.trim().isEmpty) return false;
+    final dir = await _directory();
+    final root = _canonical(dir.path, isDirectory: true);
+    final rootWithSep =
+        root.endsWith(Platform.pathSeparator) ? root : root + Platform.pathSeparator;
+    final candidate = _canonical(path, isDirectory: false);
+    return candidate.length > rootWithSep.length &&
+        candidate.startsWith(rootWithSep);
+  }
+
+  /// Deletes the owned files among [paths] (deduplicated: a Snapshot's
+  /// `localPath` and `thumbnailPath` are usually the same JPEG). Never throws;
+  /// the outcome is reported per path.
+  Future<DemoCleanupResult> deleteOwned(Iterable<String?> paths) async {
+    final unique = <String>{
+      for (final p in paths)
+        if (p != null && p.trim().isNotEmpty) p,
+    };
+    final deleted = <String>[];
+    final missing = <String>[];
+    final refused = <String>[];
+    final failed = <String>[];
+    for (final path in unique) {
+      try {
+        if (!await isOwned(path)) {
+          refused.add(path);
+          continue;
+        }
+        final type = FileSystemEntity.typeSync(path, followLinks: false);
+        if (type == FileSystemEntityType.notFound) {
+          missing.add(path);
+        } else if (type != FileSystemEntityType.file) {
+          refused.add(path); // a directory or a symlink is never ours to remove
+        } else {
+          File(path).deleteSync();
+          deleted.add(path);
+        }
+      } catch (_) {
+        failed.add(path);
+      }
+    }
+    return DemoCleanupResult(
+        deleted: deleted, alreadyMissing: missing, refused: refused, failed: failed);
+  }
+}
+
 /// Builds real Demo media from the recorded feed. It only produces [Clip]s;
 /// adding them to the Library is the caller's job.
 class DemoMediaCapture {
