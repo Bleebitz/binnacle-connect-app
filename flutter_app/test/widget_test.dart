@@ -63,7 +63,7 @@ void main() {
     expect(find.text('Not paired'), findsOneWidget);
   });
 
-  testWidgets('Live tab shows the simulated capture screen and link badge',
+  testWidgets('Live tab shows recorded Demo feed and disables vessel controls',
       (WidgetTester tester) async {
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pumpAndSettle();
@@ -74,7 +74,16 @@ void main() {
     // Its custom topbar brand text is visible (a styled Text, not a native
     // AppBar — see capture_screen.dart).
     expect(find.text('Connect'), findsOneWidget);
-    expect(find.textContaining('SIMULATED'), findsWidgets);
+    expect(find.text('DEMO — RECORDED CAMERA FEED'), findsOneWidget);
+    expect(find.text('ACQUIRING RIDER'), findsOneWidget);
+    expect(find.text('Recorded demo playback'), findsOneWidget);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -520), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('camera, framing, capture, and vessel controls are disabled'),
+        findsOneWidget);
+
+    final captureControl = tester.widget<Switch>(find.byType(Switch));
+    expect(captureControl.onChanged, isNull);
   });
 
   testWidgets('Community > Compete opens the hub, King of Wake speed-class validation works live',

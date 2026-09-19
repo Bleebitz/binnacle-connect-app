@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../core/app_config.dart';
 import '../../core/models/clip.dart' show ClipKind;
 import '../../core/models/vessel_state.dart';
+import '../../core/services/camera_media_source.dart';
 import '../../core/services/control_channel_service.dart';
 import '../../core/services/command_result.dart';
 import '../../core/services/mob_alert_state.dart';
@@ -16,7 +17,6 @@ import '../theme/binnacle_theme.dart';
 import '../widgets/eptz_video_view.dart';
 import '../widgets/glass_sheet.dart';
 import '../widgets/mob_alert_banner.dart';
-import '../widgets/simulated_wake_view.dart';
 import '../widgets/telemetry_overlay.dart';
 import 'library_screen.dart' show ClipRepository;
 
@@ -34,6 +34,7 @@ class CaptureScreen extends StatefulWidget {
 
 class _CaptureScreenState extends State<CaptureScreen> {
   late final WebRtcService _webrtc;
+  late final CameraMediaSource _mediaSource;
   bool _flash = false;
   String? _saveToast;
   bool _saveToastIsError = false;
@@ -48,11 +49,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
           ? SimulatedVideoRenderer()
           : RtcVideoRenderer(control: context.read<ControlChannelService>()),
     );
+    _mediaSource = CameraMediaSource.forMode(demo: AppConfig.isDemo, webRtc: _webrtc);
   }
 
   @override
   void dispose() {
     _toastTimer?.cancel();
+    _mediaSource.dispose();
     _webrtc.dispose();
     super.dispose();
   }
@@ -165,7 +168,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
             else const ListTile(title: Text('Connect'), subtitle: Text('Core health unavailable')),
             _PresetRow(
               selected: _preset,
-              onPreset: (p) {
+              onPreset: AppConfig.isDemo ? null : (p) {
                 setState(() => _preset = p);
                 _send(() => control.loadPreset(p, actor: 'levi'));
               },
@@ -191,7 +194,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
               ),
             ),
             const SizedBox(height: 9),
-            if (control.hasCurrentState) _RecStateCard(capture: state.capture)
+            if (control.hasCurrentState) _RecStateCard(capture: state.capture, demo: AppConfig.isDemo)
             else const Text('Recording state unknown — awaiting Core'),
             const SizedBox(height: 9),
             Padding(
@@ -204,13 +207,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   clipBehavior: Clip.hardEdge,
                   children: [
                     EptzVideoView(
-                      service: _webrtc,
-                      simulatedBuilder: (_) => Stack(
+                      source: _mediaSource,
+                    ),
+                    ValueListenableBuilder<VisionTrackState>(
+                      valueListenable: _mediaSource.trackState,
+                      builder: (_, track, __) => Stack(
                         fit: StackFit.expand,
                         children: [
-                          const SimulatedWakeView(),
-                          Center(
-                            child: ProximityReticle(riderDistanceM: telemetry.latest.riderDistanceM),
+                          if (track.riderVisible)
+                            Center(child: ProximityReticle(riderDistanceM: telemetry.latest.riderDistanceM)),
+                          Positioned(
+                            top: 37,
+                            left: 9,
+                            child: _HudTag(text: track.label, dim: !track.riderVisible),
                           ),
                         ],
                       ),
@@ -243,8 +252,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
                         child: _ZoomColumn(
                           zoom: state.framing.zoom,
                           maxZoom: state.framing.maxZoom,
-                          onZoomIn: () => _send(() => control.nudgeZoom(0.5, actor: 'levi')),
-                          onZoomOut: () => _send(() => control.nudgeZoom(-0.5, actor: 'levi')),
+                          onZoomIn: AppConfig.isDemo ? null : () => _send(() => control.nudgeZoom(0.5, actor: 'levi')),
+                          onZoomOut: AppConfig.isDemo ? null : () => _send(() => control.nudgeZoom(-0.5, actor: 'levi')),
                         ),
                       ),
                     ),
@@ -254,9 +263,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       bottom: 9,
                       child: _CaptureRow(
                         manual: state.framing.isManual,
-                        onSnapshot: () => _capture(control, ClipKind.photo),
-                        onHighlight: () => _capture(control, ClipKind.highlight),
-                        onOrient: () => _send(() => control.setControlMode(
+                        onSnapshot: AppConfig.isDemo ? null : () => _capture(control, ClipKind.photo),
+                        onHighlight: AppConfig.isDemo ? null : () => _capture(control, ClipKind.highlight),
+                        onOrient: AppConfig.isDemo ? null : () => _send(() => control.setControlMode(
                               state.framing.isManual ? 'ai' : 'manual',
                               actor: 'levi',
                             )),
@@ -314,19 +323,27 @@ class _CaptureScreenState extends State<CaptureScreen> {
               ),
             ),
             const SizedBox(height: 9),
+            if (AppConfig.isDemo) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18),
+                child: _DemoControlNotice(),
+              ),
+              const SizedBox(height: 9),
+            ],
             if (control.canBroadcast('boat')) _GoLiveBar(control: control, broadcast: state.broadcast),
             const SizedBox(height: 11),
             _QuickAdjustHandle(
               control: control,
               triggerMode: state.triggerMode,
               capture: state.capture,
+              enabled: !AppConfig.isDemo,
             ),
             const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18),
               child: Column(
                 children: [
-                  _ArmSwitchRow(control: control, capture: state.capture),
+                  _ArmSwitchRow(control: control, capture: state.capture, enabled: !AppConfig.isDemo),
                   const SizedBox(height: 12),
                   _SafetyCard(safety: state.safety),
                   const SizedBox(height: 12),
@@ -397,7 +414,7 @@ class _TopBar extends StatelessWidget {
 
 class _PresetRow extends StatelessWidget {
   final String selected;
-  final void Function(String) onPreset;
+  final void Function(String)? onPreset;
   const _PresetRow({required this.selected, required this.onPreset});
 
   static const presets = [
@@ -422,7 +439,7 @@ class _PresetRow extends StatelessWidget {
           final (id, label) = presets[i];
           final on = id == selected;
           return GestureDetector(
-            onTap: () => onPreset(id),
+            onTap: onPreset == null ? null : () => onPreset!(id),
             child: Container(
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
@@ -436,7 +453,7 @@ class _PresetRow extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
-                  color: on ? BinnacleColors.tealBright : BinnacleColors.slate,
+                  color: onPreset == null ? BinnacleColors.slateDim : on ? BinnacleColors.tealBright : BinnacleColors.slate,
                 ),
               ),
             ),
@@ -614,11 +631,12 @@ class _ManualFramingFlag extends StatelessWidget {
 
 class _RecStateCard extends StatelessWidget {
   final CaptureState capture;
-  const _RecStateCard({required this.capture});
+  final bool demo;
+  const _RecStateCard({required this.capture, this.demo = false});
 
   @override
   Widget build(BuildContext context) {
-    final recording = capture.recording;
+    final recording = !demo && capture.recording;
     final (bufLabel, bufFill, bufColor) = switch (capture.bufferHealth) {
       'recovering' => ('BUFFER RECOVERING', 0.5, BinnacleColors.amber),
       'degraded' => ('BUFFER DEGRADED', 0.2, BinnacleColors.orange),
@@ -647,11 +665,11 @@ class _RecStateCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  recording ? 'Recording — pass ${capture.passNumber}' : 'Buffering',
+                  demo ? 'Recorded demo playback' : recording ? 'Recording — pass ${capture.passNumber}' : 'Buffering',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 13.5),
                 ),
                 Text(
-                  recording ? 'trigger: ${capture.triggerSource}' : 'Ready — nothing missed',
+                  demo ? 'No Vision capture or vessel action is active' : recording ? 'trigger: ${capture.triggerSource}' : 'Ready — nothing missed',
                   style: BinnacleTheme.mono(size: 10.5),
                 ),
               ],
@@ -703,8 +721,8 @@ class _HudTag extends StatelessWidget {
 class _ZoomColumn extends StatelessWidget {
   final double zoom;
   final double maxZoom;
-  final VoidCallback onZoomIn;
-  final VoidCallback onZoomOut;
+  final VoidCallback? onZoomIn;
+  final VoidCallback? onZoomOut;
   const _ZoomColumn({required this.zoom, required this.maxZoom, required this.onZoomIn, required this.onZoomOut});
 
   @override
@@ -754,9 +772,9 @@ class _ZoomColumn extends StatelessWidget {
 
 class _CaptureRow extends StatelessWidget {
   final bool manual;
-  final VoidCallback onSnapshot;
-  final VoidCallback onHighlight;
-  final VoidCallback onOrient;
+  final VoidCallback? onSnapshot;
+  final VoidCallback? onHighlight;
+  final VoidCallback? onOrient;
   const _CaptureRow({
     required this.manual,
     required this.onSnapshot,
@@ -779,7 +797,7 @@ class _CaptureRow extends StatelessWidget {
             height: 60,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: BinnacleColors.teal,
+              color: onHighlight == null ? BinnacleColors.slateDim : BinnacleColors.teal,
               shape: BoxShape.circle,
               border: Border.all(color: BinnacleColors.offWhite.withValues(alpha: 0.85), width: 3),
             ),
@@ -805,7 +823,7 @@ class _CaptureRow extends StatelessWidget {
 
 class _CapSideButton extends StatelessWidget {
   final IconData icon;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool active;
   const _CapSideButton({required this.icon, required this.onTap, this.active = false});
 
@@ -822,7 +840,7 @@ class _CapSideButton extends StatelessWidget {
           shape: BoxShape.circle,
           border: Border.all(color: active ? BinnacleColors.tealBright : BinnacleColors.offWhite.withValues(alpha: 0.3)),
         ),
-        child: Icon(icon, size: 18, color: active ? BinnacleColors.tealBright : BinnacleColors.offWhite),
+        child: Icon(icon, size: 18, color: onTap == null ? BinnacleColors.slateDim : active ? BinnacleColors.tealBright : BinnacleColors.offWhite),
       ),
     );
   }
@@ -833,7 +851,7 @@ class _CapSideButton extends StatelessWidget {
 /// until whatever it triggers finishes, which reads as unresponsive on a
 /// touch device.
 class _PressScale extends StatefulWidget {
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final Widget child;
   const _PressScale({required this.onTap, required this.child});
 
@@ -848,9 +866,9 @@ class _PressScaleState extends State<_PressScale> {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: widget.onTap,
-      onTapDown: (_) => setState(() => _down = true),
-      onTapUp: (_) => setState(() => _down = false),
-      onTapCancel: () => setState(() => _down = false),
+      onTapDown: widget.onTap == null ? null : (_) => setState(() => _down = true),
+      onTapUp: widget.onTap == null ? null : (_) => setState(() => _down = false),
+      onTapCancel: widget.onTap == null ? null : () => setState(() => _down = false),
       child: AnimatedScale(
         scale: _down ? 0.88 : 1.0,
         duration: const Duration(milliseconds: 120),
@@ -953,14 +971,15 @@ class _QuickAdjustHandle extends StatelessWidget {
   final ControlChannelService control;
   final String triggerMode;
   final CaptureState capture;
-  const _QuickAdjustHandle({required this.control, required this.triggerMode, required this.capture});
+  final bool enabled;
+  const _QuickAdjustHandle({required this.control, required this.triggerMode, required this.capture, this.enabled = true});
 
   static const _modes = ['rider', 'gps', 'swimmer', 'onboard'];
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => _openSheet(context),
+      onTap: enabled ? () => _openSheet(context) : null,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 18),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -976,8 +995,9 @@ class _QuickAdjustHandle extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Quick adjust', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  Text('Change mode & timing without leaving the water',
+                  Text(enabled ? 'Quick adjust' : 'Vision controls unavailable in Demo',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text(enabled ? 'Change mode & timing without leaving the water' : 'Recorded footage cannot control a vessel',
                       style: TextStyle(fontSize: 10.5, color: BinnacleColors.slate)),
                 ],
               ),
@@ -1043,23 +1063,50 @@ class _QuickAdjustHandle extends StatelessWidget {
 class _ArmSwitchRow extends StatelessWidget {
   final ControlChannelService control;
   final CaptureState capture;
-  const _ArmSwitchRow({required this.control, required this.capture});
+  final bool enabled;
+  const _ArmSwitchRow({required this.control, required this.capture, this.enabled = true});
 
   @override
   Widget build(BuildContext context) {
     final pending = control.isPending('arm') || control.isPending('disarm');
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      title: const Text('Armed'),
-      subtitle: Text(capture.armed ? 'Tracking active on Vision' : 'Tracking paused',
+      title: Text(enabled ? 'Armed' : 'Vision capture controls'),
+      subtitle: Text(enabled ? capture.armed ? 'Tracking active on Vision' : 'Tracking paused' : 'Disabled for recorded Demo Mode footage',
           style: TextStyle(color: BinnacleColors.slate)),
       trailing: pending
           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
           : Switch(
               value: capture.armed,
-              onChanged: (v) => _CaptureScreenState._send(
-                  () => v ? control.arm(actor: 'levi') : control.disarm(actor: 'levi')),
+              onChanged: enabled ? (v) => _CaptureScreenState._send(
+                  () => v ? control.arm(actor: 'levi') : control.disarm(actor: 'levi')) : null,
             ),
+    );
+  }
+}
+
+class _DemoControlNotice extends StatelessWidget {
+  const _DemoControlNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: BinnacleColors.amber.withValues(alpha: 0.08),
+        border: Border.all(color: BinnacleColors.amber.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(children: [
+        const Icon(Icons.movie_outlined, size: 18, color: BinnacleColors.amber),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            'Demo playback only — camera, framing, capture, and vessel controls are disabled.',
+            style: BinnacleTheme.mono(size: 10.5, color: BinnacleColors.amber),
+          ),
+        ),
+      ]),
     );
   }
 }

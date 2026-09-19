@@ -118,6 +118,23 @@ real Core and a Core build can't silently fall back to fake data:
 
 See `flutter_app/lib/core/app_config.dart` for the exact contract.
 
+### Demo camera feed
+
+The Live tab uses one camera-media boundary for both modes. Demo builds select
+the bundled `assets/demo/gopro_dev_footage.mp4` recording; Core builds select
+the authenticated WebRTC service. Both render inside the same 16:9,
+center-cropped viewport with the same HUD layer.
+
+Demo playback autostarts, loops, and drives a deterministic Vision/Track HUD
+timeline from video position (acquiring → rider locked → tracking → the real
+fall/loss window → reacquiring). It is always labeled
+`DEMO — RECORDED CAMERA FEED`. Camera,
+framing, capture, and vessel controls are disabled for recorded playback, so
+the demo cannot imply or send a hardware action. The bundled asset is a
+130-second, fixed-stern GoPro rider pass trimmed from owner-supplied
+`GX010048.MP4`, normalized to a 1920×1080 H.264 High 4:2:0 MP4, and stripped
+of audio for demo playback.
+
 ## Product structure
 
 Bottom nav is **My Boat / Live / Session / Library / Community** — reorganized
@@ -168,7 +185,7 @@ by name but don't restate them.
 ## Status, stated honestly
 
 - `dart analyze`: clean (0 errors/warnings; info-level style lints only).
-- `flutter test`: 47/47 passing, covering app launch/navigation, the
+- `flutter test`: 82 passing (2 intentionally skipped), covering app launch/navigation, the
   Compete leaderboards and Riders aggregate, real pairing-transport
   HTTP behavior, real EC key generation/persistence, real secure-storage
   round-tripping, the Core-mode socket boundary (ack/reject/timeout/
