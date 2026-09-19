@@ -88,7 +88,11 @@ class BinnacleConnectApp extends StatelessWidget {
   /// persisted (widget tests, and always in Core Mode).
   final DemoLibraryStore? demoLibraryStore;
 
-  const BinnacleConnectApp({super.key, this.demoMedia, this.demoLibraryStore});
+  /// Which local files Demo media deletion may remove. Tests pass a temp dir.
+  final DemoMediaStorage? demoStorage;
+
+  const BinnacleConnectApp(
+      {super.key, this.demoMedia, this.demoLibraryStore, this.demoStorage});
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +151,9 @@ class BinnacleConnectApp extends StatelessWidget {
         ChangeNotifierProxyProvider2<PairingService, ControlChannelService,
             ClipRepository>(
           create: (_) {
-            final clips = ClipRepository(demoStore: demoLibraryStore);
+            final clips = ClipRepository(
+                demoStore: demoLibraryStore,
+                demoStorage: demoStorage ?? DemoMediaStorage());
             if (AppConfig.isDemo) {
               clips.seedDemo();
               // Restore Snapshots/Highlights saved by earlier Demo sessions.

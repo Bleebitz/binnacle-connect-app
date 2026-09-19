@@ -21,13 +21,49 @@ import '../widgets/glass_sheet.dart';
 /// against the Core's clip catalog ([loadFromCore]) — see
 /// media_catalog_service.dart for the (unverified, no live Core exists yet)
 /// endpoint contract.
+enum DeleteClipOutcome {
+  /// Removed from the Library and persisted; owned files cleaned up.
+  deleted,
+
+  /// Removed from the Library and persisted, but an owned file could not be
+  /// deleted (see [DeleteClipResult.orphanedFiles]). The item stays deleted.
+  deletedCleanupIncomplete,
+
+  /// No such clip.
+  notFound,
+
+  /// Built-in Demo content or Core media: not deletable from here.
+  notDeletable,
+
+  /// The removal could not be saved, so nothing was deleted.
+  persistenceFailed,
+}
+
+class DeleteClipResult {
+  final DeleteClipOutcome outcome;
+  final List<String> orphanedFiles;
+  const DeleteClipResult(this.outcome, {this.orphanedFiles = const []});
+
+  /// True when the item is gone from the Library for good.
+  bool get removedFromLibrary =>
+      outcome == DeleteClipOutcome.deleted ||
+      outcome == DeleteClipOutcome.deletedCleanupIncomplete;
+}
+
 class ClipRepository extends ChangeNotifier {
   /// Persists Demo-origin clips across restarts. Null (the default, and always
   /// in Core Mode) means nothing is persisted here: Core clips come from the
   /// Core, never from local storage.
   final DemoLibraryStore? _demoStore;
 
-  ClipRepository({DemoLibraryStore? demoStore}) : _demoStore = demoStore;
+  /// Owns which local files Binnacle may delete when Demo media is removed.
+  /// Null means no file cleanup is possible (Core Mode, or a test with no
+  /// storage): metadata can still be removed but no file is ever touched.
+  final DemoMediaStorage? _demoStorage;
+
+  ClipRepository({DemoLibraryStore? demoStore, DemoMediaStorage? demoStorage})
+      : _demoStore = demoStore,
+        _demoStorage = demoStorage;
 
   final List<Clip> _clips = [];
   List<Clip> get clips => List.unmodifiable(_clips);
@@ -139,6 +175,66 @@ class ClipRepository extends ChangeNotifier {
       if (c.id == id) return c;
     }
     return null;
+  }
+
+  /// Built-in showcase clips are regenerated on every launch, so deleting one
+  /// would only appear to work until the next start.
+  static bool isBuiltInDemo(Clip clip) => clip.id.startsWith('seed-');
+
+  /// Whether the user may delete [clip] from Binnacle. Only media the user
+  /// created locally in Recorded Demo Mode qualifies. Core clips are excluded:
+  /// there is no authoritative Core delete contract yet, and hiding a Core clip
+  /// locally while implying it was deleted would be dishonest.
+  bool canDelete(Clip clip) =>
+      AppConfig.isDemo && clip.isDemoOrigin && !isBuiltInDemo(clip);
+
+  /// Deletes a user-created Demo Snapshot or Highlight from the Binnacle
+  /// Library: the record, its persisted metadata, and Binnacle's own local
+  /// files (the Snapshot JPEG and any generated thumbnail). It never deletes the
+  /// bundled recorded Demo footage that a Highlight references, never touches a
+  /// path outside Binnacle's Demo media directory, and never removes a copy the
+  /// Snapshot may have in the phone's Gallery.
+  ///
+  /// The Library only reports success once the removal has been persisted; if
+  /// persistence fails the item stays and nothing is deleted.
+  Future<DeleteClipResult> deleteClip(String clipId) async {
+    final index = _clips.indexWhere((c) => c.id == clipId);
+    if (index == -1) {
+      return const DeleteClipResult(DeleteClipOutcome.notFound);
+    }
+    final clip = _clips[index];
+    if (!canDelete(clip)) {
+      return const DeleteClipResult(DeleteClipOutcome.notDeletable);
+    }
+
+    // Persist first, so a failure leaves the Library exactly as it was.
+    _clips.removeAt(index);
+    final store = _demoStore;
+    if (store != null) {
+      try {
+        await store.save(_persistableDemoClips);
+      } catch (e) {
+        debugPrint('Demo Library delete could not be saved: $e');
+        // Put it back where it was (the list may have changed while awaiting).
+        _clips.insert(index.clamp(0, _clips.length), clip);
+        notifyListeners();
+        return const DeleteClipResult(DeleteClipOutcome.persistenceFailed);
+      }
+    }
+    if (pendingOpenClipId == clipId) pendingOpenClipId = null;
+    notifyListeners();
+
+    // The record is gone for good; now clean up Binnacle's own files. A
+    // cleanup problem must not resurrect the item.
+    final storage = _demoStorage;
+    if (storage == null) return const DeleteClipResult(DeleteClipOutcome.deleted);
+    final cleanup = await storage.deleteOwned([clip.localPath, clip.thumbnailPath]);
+    if (cleanup.failed.isNotEmpty) {
+      debugPrint('Demo media cleanup incomplete: ${cleanup.failed}');
+      return DeleteClipResult(DeleteClipOutcome.deletedCleanupIncomplete,
+          orphanedFiles: cleanup.failed);
+    }
+    return const DeleteClipResult(DeleteClipOutcome.deleted);
   }
 
   /// Adds Demo media created locally by a Demo action, and persists it. Only
@@ -448,6 +544,10 @@ class _LibraryScreenState extends State<LibraryScreen>
   void _openClip(BuildContext context, Clip clip) {
     showGlassBottomSheet(
       context: context,
+      // The detail sheet can be taller than the default 9/16-of-screen cap
+      // (image + provenance + actions), which used to clip its bottom row; it
+      // now takes the height it needs and scrolls if the screen is short.
+      isScrollControlled: true,
       builder: (_) =>
           _ClipDetailSheet(clip: clip, repository: widget.repository),
     );
@@ -503,6 +603,51 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _confirmDelete() async {
+    final clip = widget.clip;
+    final isPhoto = clip.kind == ClipKind.photo;
+    final noun = isPhoto ? 'snapshot' : 'highlight';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete $noun?'),
+        content: Text(isPhoto
+            ? 'This removes the snapshot from Binnacle and deletes its local '
+                "Binnacle copy. A copy saved to your phone's Gallery may remain."
+            : 'This removes the saved Highlight from your Binnacle Library. '
+                'The recorded Demo source footage will not be deleted.'),
+        actions: [
+          TextButton(
+            key: const ValueKey('delete-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const ValueKey('delete-confirm'),
+            style: TextButton.styleFrom(foregroundColor: BinnacleColors.orange),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final result = await widget.repository.deleteClip(clip.id);
+    if (result.removedFromLibrary) {
+      // The item is gone for good; close its detail sheet either way. A cleanup
+      // problem with an owned file is logged by the repository and does not
+      // bring the item back.
+      if (mounted) navigator.pop();
+      messenger.showSnackBar(SnackBar(
+          content: Text('${isPhoto ? 'Snapshot' : 'Highlight'} deleted')));
+    } else {
+      messenger.showSnackBar(
+          const SnackBar(content: Text("Couldn't delete this item. Try again.")));
+    }
+  }
+
   Future<void> _togglePlayback() async {
     final player = _player;
     if (player == null || !player.value.isInitialized) return;
@@ -547,7 +692,8 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
   @override
   Widget build(BuildContext context) {
     final clip = widget.clip;
-    return Padding(
+    return SingleChildScrollView(
+      child: Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -666,9 +812,31 @@ class _ClipDetailSheetState extends State<_ClipDetailSheet> {
                   : () => Share.share(clip.mediaUrl!, subject: clip.title),
               icon: const Icon(Icons.ios_share),
             ),
+            // Kept apart from Favorite and asks first: a moving boat makes a
+            // one-tap destructive action too easy to hit by accident.
+            if (widget.repository.canDelete(clip)) ...[
+              const SizedBox(width: 20),
+              IconButton(
+                key: const ValueKey('delete-clip'),
+                tooltip: 'Delete',
+                onPressed: _confirmDelete,
+                color: BinnacleColors.orange,
+                icon: const Icon(Icons.delete_outline),
+              ),
+            ],
           ]),
+          if (ClipRepository.isBuiltInDemo(clip))
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                'Built-in Demo content — it returns on every launch, so it can’t be deleted.',
+                key: ValueKey('built-in-note'),
+                style: TextStyle(color: BinnacleColors.slate, fontSize: 12),
+              ),
+            ),
         ],
       ),
+    ),
     );
   }
 }
