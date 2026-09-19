@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.view.WindowManager
 import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -30,6 +31,21 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Keeps the display on while the landscape Live camera console is
+        // showing (FLAG_KEEP_SCREEN_ON needs no permission), cleared on exit.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "binnacle/screen")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "keepAwake") {
+                    val on = call.arguments as? Boolean ?: false
+                    runOnUiThread {
+                        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                    result.success(null)
+                } else {
+                    result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "binnacle/demo_media")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

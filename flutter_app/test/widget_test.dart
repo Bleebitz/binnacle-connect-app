@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:binnacle_connect/main.dart';
+import 'support/screen_size.dart';
 import 'package:binnacle_connect/ui/widgets/connect_startup.dart';
 
 void main() {
@@ -66,6 +67,7 @@ void main() {
   testWidgets(
       'Live tab shows the recorded Demo feed, enables local media controls, and keeps vessel controls disabled',
       (WidgetTester tester) async {
+    usePortraitPhone(tester);
     await tester.pumpWidget(const BinnacleConnectApp());
     await tester.pumpAndSettle();
 

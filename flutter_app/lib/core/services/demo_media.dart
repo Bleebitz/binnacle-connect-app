@@ -28,7 +28,17 @@ class DemoZoom extends ValueNotifier<double> {
   static const double max = 4.0;
   static const double step = 0.5;
 
-  DemoZoom() : super(min);
+  DemoZoom() : super(min) {
+    // Remember the last magnified level so a double-tap can toggle 1x <-> it.
+    addListener(() {
+      if (value > min) _lastMagnified = value;
+    });
+  }
+
+  double _lastMagnified = 2.0;
+
+  /// The most recent zoom above 1x (2.0x until the user has zoomed).
+  double get lastMagnified => _lastMagnified;
 
   static double clamp(double zoom) => zoom.clamp(min, max).toDouble();
 
@@ -39,6 +49,30 @@ class DemoZoom extends ValueNotifier<double> {
   void zoomOut() => value = clamp(value - step);
   void setZoom(double zoom) => value = clamp(zoom);
   void reset() => value = min;
+
+  /// Double-tap behaviour: from a magnified level return to 1x; from 1x go back
+  /// to the last magnified level (not a hard-coded 2x once the user has one).
+  void toggleReset() => value = value > min ? min : clamp(_lastMagnified);
+}
+
+/// Landscape view modes. In Recorded Demo these only change which overlays the
+/// UI shows; no ePTZ framing is performed by a recorded video.
+enum DemoViewMode { raw, trackFollow, manual }
+
+/// Rider Lock for the recorded Demo: the operator's local confirmation that the
+/// boxed target is the intended rider. It is Demo presentation state only and
+/// never an authoritative Track or Core lock. There is exactly one annotated
+/// target in the controlled footage, so this is simply locked or not locked.
+class DemoRiderLock extends ValueNotifier<String?> {
+  DemoRiderLock() : super(null);
+
+  bool get isLocked => value != null;
+
+  bool isLockedOn(String targetId) => value == targetId;
+
+  void lock(String targetId) => value = targetId;
+
+  void clear() => value = null;
 }
 
 /// The window of the recorded source a Save Highlight covers, anchored on the

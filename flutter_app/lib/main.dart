@@ -221,7 +221,15 @@ class _RootShellState extends State<_RootShell> {
     // comments.
     final screens = [
       MyBoatScreen(onGoLive: () => setState(() => _index = 1)),
-      const CaptureScreen(),
+      CaptureScreen(
+        isActiveTab: _index == 1,
+        // Leaving the landscape console: nothing traps the user in it.
+        onExitConsole: () => setState(() => _index = 0),
+        onOpenClip: (id) {
+          clipRepo.requestOpen(id);
+          setState(() => _index = 3);
+        },
+      ),
       const SessionScreen(),
       LibraryScreen(repository: clipRepo),
       const CommunityScreen(),
@@ -255,7 +263,12 @@ class _RootShellState extends State<_RootShell> {
       // plus a tint that shifts toward orange app-wide while a MOB alert is
       // active — chrome that reacts to what's actually happening, on the
       // one surface that's visible no matter which tab you're on.
-      bottomNavigationBar: ClipRect(
+      // The landscape Live camera console owns the whole display, so the normal
+      // bottom navigation is hidden while it is showing.
+      bottomNavigationBar: (_index == 1 &&
+              MediaQuery.orientationOf(context) == Orientation.landscape)
+          ? null
+          : ClipRect(
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: AnimatedContainer(

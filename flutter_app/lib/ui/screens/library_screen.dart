@@ -121,6 +121,26 @@ class ClipRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A Library item another screen (the Live console's Snapshot thumbnail) asked
+  /// to open. The Library screen consumes it once it is showing.
+  String? pendingOpenClipId;
+
+  void requestOpen(String clipId) {
+    pendingOpenClipId = clipId;
+    notifyListeners();
+  }
+
+  /// Returns and clears the pending request if that clip exists.
+  Clip? takePendingOpen() {
+    final id = pendingOpenClipId;
+    if (id == null) return null;
+    pendingOpenClipId = null;
+    for (final c in _clips) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
   /// Adds Demo media created locally by a Demo action, and persists it. Only
   /// valid in Demo Mode; Core media never enters the Library this way.
   Future<void> addDemoLocalClip(Clip clip) async {
@@ -307,6 +327,12 @@ class _LibraryScreenState extends State<LibraryScreen>
       animation: widget.repository,
       builder: (context, _) {
         final all = widget.repository.clips;
+        final pending = widget.repository.takePendingOpen();
+        if (pending != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _openClip(context, pending);
+          });
+        }
         final clips =
             all.where((c) => _filter == null || c.kind == _filter).toList();
         final hero = _filter == null && all.isNotEmpty ? all.first : null;

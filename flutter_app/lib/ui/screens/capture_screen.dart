@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_config.dart';
@@ -20,6 +21,8 @@ import '../widgets/eptz_video_view.dart';
 import '../widgets/glass_sheet.dart';
 import '../widgets/mob_alert_banner.dart';
 import '../widgets/telemetry_overlay.dart';
+import 'landscape_camera_console.dart';
+import 'landscape_console_controller.dart';
 import 'library_screen.dart' show ClipRepository;
 
 // Layout and componentry follow the retro-hero / technical-instrument UX
@@ -33,7 +36,23 @@ class CaptureScreen extends StatefulWidget {
   @visibleForTesting
   final CameraMediaSource? mediaSourceForTesting;
 
-  const CaptureScreen({super.key, this.mediaSourceForTesting});
+  /// Whether the Live tab is the visible tab. The landscape camera console only
+  /// takes over the display while it is (the shell keeps every tab mounted).
+  final bool isActiveTab;
+
+  /// Leave the landscape console (the shell switches to another tab).
+  final VoidCallback? onExitConsole;
+
+  /// Open a Library item (for example the Snapshot thumbnail).
+  final ValueChanged<String>? onOpenClip;
+
+  const CaptureScreen({
+    super.key,
+    this.mediaSourceForTesting,
+    this.isActiveTab = true,
+    this.onExitConsole,
+    this.onOpenClip,
+  });
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -48,6 +67,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
   bool _demoBusy = false;
   Timer? _toastTimer;
   String _preset = 'wakesurf';
+
+  // Landscape console. Presentation state lives here (not in the console
+  // widget) so rotating the phone does not reset it, and the video widget keeps
+  // one GlobalKey so it is moved, never rebuilt, when the layout switches.
+  final LandscapeConsoleController _console = LandscapeConsoleController();
+  final GlobalKey _videoKey = GlobalKey(debugLabel: 'live-video');
+  String? _consoleToast;
+  bool _consoleToastIsError = false;
+  bool _consoleChromeActive = false;
+  static const MethodChannel _screenChannel = MethodChannel('binnacle/screen');
 
   @override
   void initState() {
@@ -64,9 +93,30 @@ class _CaptureScreenState extends State<CaptureScreen> {
   @override
   void dispose() {
     _toastTimer?.cancel();
+    if (_consoleChromeActive) _setConsoleChrome(false);
+    _console.dispose();
     _mediaSource.dispose();
     _webrtc.dispose();
     super.dispose();
+  }
+
+  /// Immersive full-screen plus keep-screen-on while the console is showing;
+  /// normal system UI and screen timeout are restored when it is not. The
+  /// system bars stay reachable by an edge swipe, so the user is never trapped.
+  void _setConsoleChrome(bool on) {
+    _consoleChromeActive = on;
+    try {
+      SystemChrome.setEnabledSystemUIMode(
+          on ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge);
+    } catch (_) {}
+    _screenChannel.invokeMethod<void>('keepAwake', on).catchError((_) {});
+  }
+
+  void _syncConsoleChrome(bool active) {
+    if (active == _consoleChromeActive) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && active != _consoleChromeActive) _setConsoleChrome(active);
+    });
   }
 
   void _fireFlash() {
@@ -117,6 +167,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
     } else {
       _showSaveToast(failureMessage, isError: true);
     }
+  }
+
+  void _setConsoleToast(String text, {bool isError = false}) {
+    setState(() {
+      _consoleToast = text;
+      _consoleToastIsError = isError;
+    });
+    Timer(const Duration(seconds: 3), () {
+      if (mounted && _consoleToast == text) setState(() => _consoleToast = null);
+    });
   }
 
   Future<void> _capture(ControlChannelService control, ClipKind kind) async {
@@ -170,6 +230,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
           _showSaveToast(result.galleryUri == null
               ? 'Snapshot saved to Library'
               : 'Snapshot saved to Library and Photos');
+          _console.showThumbnail(result.clip);
+          _setConsoleToast('Snapshot saved to Library');
         }
       } else {
         final duration = source.sourceDuration;
@@ -184,16 +246,150 @@ class _CaptureScreenState extends State<CaptureScreen> {
           postRoll: Duration(seconds: capture.postRollSeconds),
         );
         await library.addDemoLocalClip(clip);
-        if (mounted) _showSaveToast('Highlight saved to Library');
+        if (mounted) {
+          _showSaveToast('Highlight saved to Library');
+          final seg = clip.segment;
+          final before = seg == null ? capture.preRollSeconds : (position - seg.start).inSeconds;
+          final after = seg == null ? capture.postRollSeconds : (seg.end - position).inSeconds;
+          _console.pulseHighlight();
+          _setConsoleToast('Highlight saved · ${before}s before / ${after}s after');
+        }
       }
     } catch (e) {
       // StateError.toString() adds a "Bad state:" prefix that means nothing to
       // a rider; show the actual reason.
       final reason = e is StateError ? e.message : e.toString();
-      if (mounted) _showSaveToast('$label failed: $reason', isError: true);
+      if (mounted) {
+        _showSaveToast('$label failed: $reason', isError: true);
+        _setConsoleToast('$label failed: $reason', isError: true);
+      }
     } finally {
       if (mounted) setState(() => _demoBusy = false);
     }
+  }
+
+  /// The single video widget for both layouts. It carries one GlobalKey, so
+  /// rotating the phone moves the same element (and its VideoPlayerController)
+  /// between the portrait card and the landscape console instead of rebuilding
+  /// it: playback position, Track state and zoom all survive.
+  Widget _buildVideo({required bool portrait}) => EptzVideoView(
+        key: _videoKey,
+        source: _mediaSource,
+        fit: portrait ? BoxFit.cover : BoxFit.contain,
+        enablePinch: portrait,
+        showDemoLabel: portrait,
+        tagTopInset: portrait ? 0 : 78,
+      );
+
+  ConsoleBindings _consoleBindings(ControlChannelService control) {
+    final source = _mediaSource;
+    final state = control.state;
+    if (source is DemoRecordedCameraSource) {
+      // Recorded Demo: everything below is LOCAL. No Core command is sent.
+      return ConsoleBindings(
+        isDemo: true,
+        zoom: source.zoom.value,
+        maxZoom: DemoZoom.max,
+        pinchEnabled: true,
+        onZoomIn: source.zoom.zoomIn,
+        onZoomOut: source.zoom.zoomOut,
+        onZoomTo: source.zoom.setZoom,
+        onZoomToggle: source.zoom.toggleReset,
+        onSnapshot: () => _capture(control, ClipKind.photo),
+        onHighlight: () => _capture(control, ClipKind.highlight),
+        onOpenThumbnail: (clip) => widget.onOpenClip?.call(clip.id),
+        onExit: () => widget.onExitConsole?.call(),
+        viewMode: source.viewMode.value,
+        enabledViewModes: DemoViewMode.values.toSet(),
+        onViewMode: (m) => source.viewMode.value = m,
+        framing: source.framing,
+        lockedId: source.riderLock.value,
+        onLock: source.riderLock.lock,
+        onClearLock: source.riderLock.clear,
+        onPanManual: source.framing.panManual,
+      );
+    }
+    // Core Mode: authoritative Core paths, unchanged. There is no local
+    // transform, no local pinch, no Core Rider Lock/RAW capability yet.
+    void nudgeTo(double target) {
+      final clamped = target.clamp(1.0, state.framing.maxZoom).toDouble();
+      final delta = clamped - state.framing.zoom;
+      if (delta.abs() < 0.01) return;
+      _send(() => control.nudgeZoom(delta, actor: 'levi'));
+    }
+
+    return ConsoleBindings(
+      isDemo: false,
+      zoom: state.framing.zoom,
+      maxZoom: state.framing.maxZoom,
+      pinchEnabled: false,
+      onZoomIn: () => _send(() => control.nudgeZoom(0.5, actor: 'levi')),
+      onZoomOut: () => _send(() => control.nudgeZoom(-0.5, actor: 'levi')),
+      onZoomTo: nudgeTo,
+      onZoomToggle: () => nudgeTo(state.framing.zoom > 1.0 ? 1.0 : 2.0),
+      onSnapshot: () => _capture(control, ClipKind.photo),
+      onHighlight: () => _capture(control, ClipKind.highlight),
+      onOpenThumbnail: (_) {},
+      onExit: () => widget.onExitConsole?.call(),
+      viewMode: state.framing.isManual ? DemoViewMode.manual : DemoViewMode.trackFollow,
+      enabledViewModes: const {DemoViewMode.trackFollow, DemoViewMode.manual},
+      onViewMode: (m) => _send(() => control.setControlMode(
+            m == DemoViewMode.manual ? 'manual' : 'ai',
+            actor: 'levi',
+          )),
+      framing: null,
+      lockedId: null,
+      onLock: (_) {},
+      onClearLock: () {},
+      onPanManual: (_) {},
+    );
+  }
+
+  Widget _buildConsole(BuildContext context, ControlChannelService control,
+      TelemetrySocket telemetry, MobAlertState mobAlert) {
+    final source = _mediaSource;
+    final listenables = <Listenable>[
+      if (source is DemoRecordedCameraSource) ...[
+        source.zoom,
+        source.viewMode,
+        source.riderLock,
+        source.framing,
+      ],
+    ];
+    return ListenableBuilder(
+      listenable: Listenable.merge(listenables),
+      builder: (context, _) => LandscapeCameraConsole(
+        video: _buildVideo(portrait: false),
+        source: source,
+        ui: _console,
+        bindings: _consoleBindings(control),
+        vessel: control.state,
+        linkStatus: control.status,
+        telemetry: telemetry,
+        mobActive: mobAlert.active,
+        mobBanner: MobAlertBanner(
+          active: mobAlert.active,
+          lat: '36.02083° N',
+          lon: '114.74215° W',
+          headingDegrees: 128,
+          onAcknowledge: () {
+            final sent = _send(() => control.acknowledgeMob(actor: 'levi'));
+            _completeIfSent(
+              sent,
+              failureMessage: 'Acknowledge failed — command rejected',
+              onSuccess: () {
+                context.read<ClipRepository>().addFromCapture(kind: ClipKind.fall, preset: _preset);
+                mobAlert.acknowledge();
+              },
+            );
+          },
+        ),
+        toast: _consoleToast,
+        toastIsError: _consoleToastIsError,
+        flash: _flash,
+        captureBusy: _demoBusy,
+      ),
+    );
   }
 
   @override
@@ -215,6 +411,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
         !control.hasCurrentState &&
         _webrtc.status != WebRtcLinkStatus.idle) {
       _webrtc.disconnect();
+    }
+
+    final consoleActive = widget.isActiveTab &&
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+    _syncConsoleChrome(consoleActive);
+    if (consoleActive) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: _buildConsole(context, control, telemetry, mobAlert),
+      );
     }
 
     return Scaffold(
@@ -266,15 +472,15 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   child: Stack(
                   clipBehavior: Clip.hardEdge,
                   children: [
-                    EptzVideoView(
-                      source: _mediaSource,
-                    ),
+                    _buildVideo(portrait: true),
                     ValueListenableBuilder<VisionTrackState>(
                       valueListenable: _mediaSource.trackState,
                       builder: (_, track, __) => Stack(
                         fit: StackFit.expand,
                         children: [
-                          if (track.riderVisible)
+                          // Recorded Demo draws its rider box on the video itself from the
+                          // spatial annotation; this centred reticle is not spatial.
+                          if (track.riderVisible && _mediaSource is! DemoRecordedCameraSource)
                             Center(child: ProximityReticle(riderDistanceM: telemetry.latest.riderDistanceM)),
                           Positioned(
                             top: 37,
