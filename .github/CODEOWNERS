@@ -1,0 +1,14 @@
+# Biometric (Spotter AI) code and its legal record: hard block, owner-approved
+# 2026-09-18. Changes here need review from the privacy admin (a person with
+# write access; GitHub ignores owners who do not have it). The privacy-admin
+# list the guard enforces is .github/privacy-admins.txt.
+#
+# GitHub cannot require a team handle on a personal repository. Until a second
+# person with write access exists, a PR authored by the privacy admin cannot be
+# approved by that same person, so biometric changes cannot merge. That is the
+# intended hard block; add a second privacy admin before legal sign-off.
+/flutter_app/lib/spotter_biometrics/   @Bleebitz
+/flutter_app/test/spotter_biometrics/  @Bleebitz
+**/spotter_biometrics/**               @Bleebitz
+/docs/legal/                           @Bleebitz
+/.github/privacy-admins.txt            @Bleebitz
